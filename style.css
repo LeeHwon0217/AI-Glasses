@@ -2,7 +2,7 @@
 
 :root {
   --box-top: calc(env(safe-area-inset-top) + 64px);
-  --box: min(100vw, calc(100vh - env(safe-area-inset-top) - 64px - 130px));
+  --box-h: 100vw; /* 실제 높이는 app.js가 저장된 값으로 덮어쓴다 */
 }
 
 html, body {
@@ -62,9 +62,9 @@ html, body {
 .box {
   position: fixed;
   top: var(--box-top);
-  left: calc((100vw - var(--box)) / 2);
-  width: var(--box);
-  height: var(--box);
+  left: 0;
+  width: 100vw;
+  height: var(--box-h);
   border: 3px solid #fff;
   border-radius: 6px;
   box-shadow: 0 0 0 200vmax rgba(0, 0, 0, .62);
@@ -79,13 +79,34 @@ html, body {
 
 .box-hint {
   position: absolute;
-  left: 0; right: 0; bottom: 8px;
+  left: 0; right: 0; bottom: 26px;
   text-align: center;
   font-size: 15px;
   font-weight: 600;
   text-shadow: 0 1px 4px #000, 0 0 8px #000;
 }
 .box.hold .box-hint, .box.busy .box-hint, .box.done .box-hint { display: none; }
+
+.box-handle {
+  position: absolute;
+  left: 50%; bottom: -24px;
+  width: 120px; height: 44px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  touch-action: none;
+}
+.box-handle::before {
+  content: "↕ 크기";
+  padding: 5px 14px;
+  border-radius: 999px;
+  background: #fff;
+  color: #000;
+  font-size: 13px;
+  font-weight: 700;
+}
 
 .gauge {
   position: absolute;
@@ -111,7 +132,7 @@ html, body {
 
 .panel {
   position: fixed;
-  top: calc(var(--box-top) + var(--box) + 14px);
+  top: calc(var(--box-top) + var(--box-h) + 26px);
   left: 0; right: 0; bottom: 0;
   display: flex;
   flex-direction: column;

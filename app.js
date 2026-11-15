@@ -136,6 +136,45 @@ function boxSourceRect() {
   return { x, y, w, h };
 }
 
+// 박스 아래 손잡이를 위아래로 끌어 높이를 바꾼다. 가로로 긴 문제는 낮게, 세로로 긴 문제는 높게.
+const BOX_MIN_H = 90;
+let dragging = false;
+
+function boxMaxH() {
+  return window.innerHeight - boxEl.getBoundingClientRect().top - 120; // 정답 자리 확보
+}
+
+function setBoxHeight(h) {
+  const clamped = Math.round(Math.max(BOX_MIN_H, Math.min(boxMaxH(), h)));
+  document.documentElement.style.setProperty('--box-h', clamped + 'px');
+  return clamped;
+}
+
+function restoreBoxHeight() {
+  const saved = Number(store.get('ag_box_h', '0'));
+  setBoxHeight(saved || window.innerWidth * 0.6);
+}
+restoreBoxHeight();
+window.addEventListener('resize', restoreBoxHeight);
+
+const handle = $('boxHandle');
+handle.addEventListener('pointerdown', (e) => {
+  dragging = true;
+  handle.setPointerCapture(e.pointerId);
+});
+handle.addEventListener('pointermove', (e) => {
+  if (dragging) setBoxHeight(e.clientY - boxEl.getBoundingClientRect().top);
+});
+const endDrag = () => {
+  if (!dragging) return;
+  dragging = false;
+  store.set('ag_box_h', String(boxEl.getBoundingClientRect().height));
+  stillMs = 0;
+  prevGray = null;
+};
+handle.addEventListener('pointerup', endDrag);
+handle.addEventListener('pointercancel', endDrag);
+
 // ---------- 움직임 감지 ----------
 function readGray() {
   const r = boxSourceRect();
@@ -164,7 +203,7 @@ function contrast(g) {
 }
 
 function tick() {
-  if (!cameraReady || state === 'solving' || settings.open || document.hidden) return;
+  if (!cameraReady || state === 'solving' || dragging || settings.open || document.hidden) return;
   if (video.readyState < 2 || !video.videoWidth) return;
 
   const gray = readGray();
@@ -389,7 +428,7 @@ function speak(text) {
 // 답이 떠 있을 때: 이전 답을 지우고 다음 문제를 기다린다 (박스에 문제가 멈춰 있으면 1초 뒤 자동 촬영)
 // 대기 중일 때: 기다리지 않고 바로 찍는다
 document.addEventListener('click', (e) => {
-  if (settings.open || e.target.closest('.top')) return;
+  if (settings.open || e.target.closest('.top') || e.target.closest('.box-handle')) return;
   if (!cameraReady || state === 'solving') return;
   if (cfg.voice && window.speechSynthesis) speechSynthesis.resume(); // iOS 음성 잠금 해제
   if (state === 'shown') {
