@@ -33,28 +33,19 @@ const TICK_MS = 100;            // 움직임 검사 주기
 const SMALL_W = 64, SMALL_H = 48;
 const THRESHOLDS = [3, 5, 7, 10, 14]; // 민감도 1~5 → 허용 픽셀 차이(0~255)
 const MIN_CONTRAST = 8;         // 이보다 밋밋한 화면(렌즈 가림, 빈 벽)은 무시
-const MOVE_TICKS = 4;           // 답을 본 뒤 이만큼 연속으로 크게 움직여야 다음 문제 준비
 const MAX_SIDE = 1568;          // 전송 이미지 긴 변
 const REQUEST_TIMEOUT_MS = 120000;
 
-const SYSTEM_PROMPT = `너는 휴대폰 카메라로 찍은 객관식 문제를 푸는 도우미다. 네 출력은 프로그램이 [문제]와 [정답] 표시를 기준으로 잘라서 화면에 보여준다. 사용자는 네가 문제를 제대로 읽었는지 [문제] 부분으로 확인하고, [정답] 부분은 아주 큰 글씨로 본다.
+const SYSTEM_PROMPT = `너는 휴대폰 카메라로 찍은 객관식 문제를 푸는 도우미다. 네 출력은 가공 없이 화면에 아주 큰 글씨로 그대로 표시되고, 사용자는 풀이 없이 정답 번호만 한눈에 보고 싶어 한다.
 
-반드시 아래 형식으로만 출력한다.
-
-[문제]
-사진에 보이는 문제와 선택지를 글자 그대로 옮겨 적는다. 요약하거나 고치지 않는다. 그림·표·그래프는 대괄호 안에 한 줄로 설명한다.
-[정답]
-정답만 적는다.
-
-[정답] 작성 규칙:
-- 문제가 하나면 정답 선택지의 기호만 적는다. 문제지에 쓰인 기호를 그대로 쓴다. 예: ③ 또는 B
-- 문제가 여러 개면 한 줄에 하나씩 "문제번호 정답기호" 형식으로 적는다. 예:
-12번 ③
-13번 ①
-- 선택지가 없는 주관식·단답형이면 답만 짧게 적는다.
-- 풀이, 설명, 인사말, 마크다운은 적지 않는다. 신중하게 풀되 적는 것은 정답뿐이다.
-
-사진이 흐리거나 잘려서 문제를 읽을 수 없거나 문제가 아예 없으면, 위 형식 대신 NONE 이라고만 출력한다.`;
+출력 규칙:
+- 사진에 문제가 하나면 정답 선택지의 번호를 "3번" 형식으로만 출력한다. 선택지가 ①②③이든 1) 2) 3)이든 숫자와 "번"으로 쓴다. 선택지가 A, B, C 같은 글자면 "B" 처럼 글자만 쓴다.
+- 문제가 여러 개 보이면 한 줄에 하나씩 "문제번호: 정답" 형식으로 출력한다. 예:
+12: 3번
+13: 1번
+- 선택지가 없는 주관식·단답형이면 답만 짧게 출력한다.
+- 사진이 흐리거나 잘려서 문제를 읽을 수 없거나 문제가 아예 없으면 NONE 이라고만 출력한다.
+- 문제 내용, 풀이, 설명, 인사말, 마크다운은 출력하지 않는다. 신중하게 풀되 출력은 정답뿐이다.`;
 
 // ---------- 화면 요소 ----------
 const $ = (id) => document.getElementById(id);
@@ -64,7 +55,6 @@ const boxEl = $('box');
 const gauge = $('gauge');
 const gaugeFg = $('gaugeFg');
 const panel = $('panel');
-const readEl = $('read');
 const answerEl = $('answer');
 const settings = $('settings');
 const GAUGE_LEN = 276.46;
@@ -78,9 +68,7 @@ const big = document.createElement('canvas');
 // watch: 멈춤 감지 중 / solving: 풀이 중 / shown: 답 표시 중(폰을 옮길 때까지 대기)
 let state = 'watch';
 let prevGray = null;
-let refGray = null;   // 마지막으로 푼 장면
 let stillMs = 0;
-let moveTicks = 0;
 let cameraReady = false;
 let solveTimer = null;
 
@@ -166,25 +154,6 @@ function meanDiff(a, b) {
   return s / a.length;
 }
 
-// 손떨림으로 조금 밀린 같은 장면을 알아보기 위해, 몇 픽셀씩 밀어 보며 가장 작은 차이를 구한다
-function minShiftDiff(a, b, max = 4) {
-  let best = Infinity;
-  for (let dy = -max; dy <= max; dy++) {
-    for (let dx = -max; dx <= max; dx++) {
-      let s = 0, n = 0;
-      for (let y = Math.max(0, dy); y < SMALL_H + Math.min(0, dy); y++) {
-        const ra = y * SMALL_W, rb = (y - dy) * SMALL_W;
-        for (let x = Math.max(0, dx); x < SMALL_W + Math.min(0, dx); x++) {
-          s += Math.abs(a[ra + x] - b[rb + x - dx]);
-          n++;
-        }
-      }
-      if (s / n < best) best = s / n;
-    }
-  }
-  return best;
-}
-
 function contrast(g) {
   let sum = 0;
   for (let i = 0; i < g.length; i++) sum += g[i];
@@ -203,19 +172,7 @@ function tick() {
   const diff = prevGray ? meanDiff(gray, prevGray) : Infinity;
   prevGray = gray;
 
-  if (state === 'shown') {
-    // 답을 보는 동안의 손떨림은 무시하고, 폰을 확실히 옮겼을 때만 다음 문제를 준비한다
-    moveTicks = diff > thr * 2.5 ? moveTicks + 1 : 0;
-    if (moveTicks >= MOVE_TICKS) {
-      state = 'watch';
-      stillMs = 0;
-      moveTicks = 0;
-      panel.classList.add('stale');
-      setBox('');
-      setStatus('다음 문제를 박스에 넣고 멈추세요');
-    }
-    return;
-  }
+  if (state === 'shown') return; // 답을 보는 동안은 탭할 때까지 기다린다
 
   if (diff > thr || contrast(gray) < MIN_CONTRAST || !cfg.key) {
     stillMs = 0;
@@ -229,17 +186,7 @@ function tick() {
   setBox('hold');
   if (stillMs < STILL_MS) return;
 
-  if (refGray && minShiftDiff(gray, refGray) < thr * 1.5) {
-    // 방금 푼 문제를 그대로 비추고 있으면 다시 풀지 않는다
-    state = 'shown';
-    stillMs = 0;
-    setGauge(0);
-    setBox('done');
-    panel.classList.remove('stale');
-    setStatus('이미 푼 문제예요 · 다시 풀려면 화면을 탭');
-    return;
-  }
-  capture(gray);
+  capture();
 }
 
 // ---------- 촬영과 풀이 ----------
@@ -252,14 +199,12 @@ function grabJpegBase64() {
   return big.toDataURL('image/jpeg', 0.9).split(',')[1];
 }
 
-async function capture(gray) {
+async function capture() {
   if (state === 'solving') return;
   if (!cfg.key) { openSettings(); return; }
 
   state = 'solving';
   stillMs = 0;
-  moveTicks = 0;
-  refGray = gray || readGray();
   const image = grabJpegBase64();
 
   panel.hidden = true;
@@ -277,13 +222,11 @@ async function capture(gray) {
     const text = await solve(image);
     const solved = showAnswer(text);
     setBox(solved ? 'done' : '');
-    setStatus(solved ? '✅ 풀이 끝 · 다음 문제로 이동' : '못 읽었어요 · 탭하면 다시 찍어요', solved ? '' : 'err');
-    if (!solved) refGray = null;
+    setStatus(solved ? '✅ 풀이 끝 · 다음 문제는 탭' : '못 읽었어요 · 탭하면 다시 찍어요', solved ? '' : 'err');
   } catch (e) {
     showMessage(e.userMessage || '풀이에 실패했어요. 화면을 탭하면 다시 시도해요.');
     setBox('');
     setStatus('오류 · 탭하면 다시 찍어요', 'err');
-    refGray = null;
     if (e.needsKey) openSettings();
   } finally {
     clearInterval(solveTimer);
@@ -306,7 +249,7 @@ async function solve(imageBase64) {
       {
         role: 'user',
         content: [
-          { type: 'text', text: '이 사진의 문제를 옮겨 적고 정답을 알려줘.' },
+          { type: 'text', text: '이 사진의 문제를 풀고 정답만 출력해.' },
           { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + imageBase64, detail: 'high' } },
         ],
       },
@@ -404,15 +347,9 @@ async function loadModels() {
 }
 
 // ---------- 답 표시 ----------
-// AI 출력을 [문제]와 [정답] 부분으로 나눈다. 표시가 없으면 전체를 정답으로 본다.
-function parseOutput(text) {
-  const m = text.match(/\[문제\]\s*([\s\S]*?)\s*\[정답\]\s*([\s\S]*)$/);
-  return m ? { read: m[1].trim(), answer: m[2].trim() } : { read: '', answer: text.trim() };
-}
-
 // 정답을 화면에 띄운다. 문제를 못 읽은 경우 false를 돌려준다.
 function showAnswer(text) {
-  const { read, answer } = parseOutput(text);
+  const answer = text.trim();
   if (!answer || /^NONE\.?$/i.test(answer)) {
     showMessage('문제를 읽지 못했어요.\n박스 안에 더 가까이, 또렷하게 넣어주세요.');
     return false;
@@ -420,16 +357,12 @@ function showAnswer(text) {
   const lines = answer.split('\n').map((l) => l.trim()).filter(Boolean);
   const longest = Math.max(...lines.map((l) => l.length));
   let size = 'sm';
-  if (lines.length === 1 && longest <= 2) size = 'xl';
-  else if (lines.length <= 3 && longest <= 8) size = 'lg';
-  else if (lines.length <= 6 && longest <= 14) size = 'md';
+  if (lines.length === 1 && longest <= 3) size = 'xl';
+  else if (lines.length <= 4 && longest <= 9) size = 'lg';
+  else if (lines.length <= 7 && longest <= 14) size = 'md';
 
-  readEl.textContent = read;
-  readEl.hidden = !read;
-  readEl.scrollTop = 0;
   answerEl.textContent = lines.join('\n');
   answerEl.className = 'answer ' + size;
-  panel.classList.remove('stale');
   panel.hidden = false;
   navigator.vibrate?.([60, 60, 60]);
   speak(lines.join(', '));
@@ -437,10 +370,8 @@ function showAnswer(text) {
 }
 
 function showMessage(text) {
-  readEl.hidden = true;
   answerEl.textContent = text;
   answerEl.className = 'answer msg';
-  panel.classList.remove('stale');
   panel.hidden = false;
 }
 
@@ -454,12 +385,23 @@ function speak(text) {
   speechSynthesis.speak(u);
 }
 
-// ---------- 화면 탭: 바로 촬영 ----------
+// ---------- 화면 탭 ----------
+// 답이 떠 있을 때: 이전 답을 지우고 다음 문제를 기다린다 (박스에 문제가 멈춰 있으면 1초 뒤 자동 촬영)
+// 대기 중일 때: 기다리지 않고 바로 찍는다
 document.addEventListener('click', (e) => {
-  if (settings.open || e.target.closest('.top') || e.target.closest('.read')) return;
+  if (settings.open || e.target.closest('.top')) return;
   if (!cameraReady || state === 'solving') return;
   if (cfg.voice && window.speechSynthesis) speechSynthesis.resume(); // iOS 음성 잠금 해제
-  capture(null);
+  if (state === 'shown') {
+    panel.hidden = true;
+    state = 'watch';
+    stillMs = 0;
+    prevGray = null;
+    setBox('');
+    idleStatus();
+    return;
+  }
+  capture();
 });
 
 // ---------- 설정 화면 ----------
