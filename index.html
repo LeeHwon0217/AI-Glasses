@@ -24,6 +24,11 @@
     <circle class="gauge-bg" cx="50" cy="50" r="44"></circle>
     <circle id="gaugeFg" class="gauge-fg" cx="50" cy="50" r="44"></circle>
   </svg>
+  <div class="box-busy" aria-hidden="true">
+    <span class="busy-spin"></span>
+    <span class="busy-text">푸는 중</span>
+    <span id="busySec" class="busy-sec">0초</span>
+  </div>
   <div id="boxHandle" class="box-handle" aria-label="박스 크기 조절"></div>
 </div>
 
@@ -45,6 +50,7 @@
 
     <label for="effort">풀이 깊이</label>
     <select id="effort">
+      <option value="fast">가장 빠르게 (추천)</option>
       <option value="low">빠르게</option>
       <option value="medium">보통</option>
       <option value="high">꼼꼼하게</option>

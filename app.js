@@ -22,7 +22,7 @@ window.addEventListener('hashchange', importKeyFromHash);
 const cfg = {
   get key() { return store.get('ag_key', ''); },
   get model() { return store.get('ag_model', DEFAULT_MODEL); },
-  get effort() { return store.get('ag_effort', 'low'); },
+  get effort() { return store.get('ag_effort2', 'fast'); },
   get sens() { return Number(store.get('ag_sens', '3')); },
   get voice() { return store.get('ag_voice', '0') === '1'; },
 };
@@ -33,8 +33,10 @@ const TICK_MS = 100;            // 움직임 검사 주기
 const SMALL_W = 64, SMALL_H = 48;
 const THRESHOLDS = [3, 5, 7, 10, 14]; // 민감도 1~5 → 허용 픽셀 차이(0~255)
 const MIN_CONTRAST = 8;         // 이보다 밋밋한 화면(렌즈 가림, 빈 벽)은 무시
-const MAX_SIDE = 1568;          // 전송 이미지 긴 변
+const MAX_SIDE = 1280;          // 전송 이미지 긴 변
 const REQUEST_TIMEOUT_MS = 120000;
+// 풀이 깊이 설정 → 보내 볼 reasoning_effort 값 (앞에서부터 시도)
+const EFFORT_TRIES = { fast: ['minimal', 'none', 'low'], low: ['low'], medium: ['medium'], high: ['high'] };
 
 const SYSTEM_PROMPT = `너는 휴대폰 카메라로 찍은 객관식 문제를 푸는 도우미다. 네 출력은 가공 없이 화면에 아주 큰 글씨로 그대로 표시되고, 사용자는 풀이 없이 정답 번호만 한눈에 보고 싶어 한다.
 
@@ -235,7 +237,7 @@ function grabJpegBase64() {
   big.width = Math.round(r.w * scale);
   big.height = Math.round(r.h * scale);
   big.getContext('2d').drawImage(video, r.x, r.y, r.w, r.h, 0, 0, big.width, big.height);
-  return big.toDataURL('image/jpeg', 0.9).split(',')[1];
+  return big.toDataURL('image/jpeg', 0.85).split(',')[1];
 }
 
 async function capture() {
@@ -248,12 +250,15 @@ async function capture() {
 
   panel.hidden = true;
   setGauge(0);
-  gauge.classList.add('spin');
   setBox('busy');
   navigator.vibrate?.(40);
 
   const started = Date.now();
-  const showElapsed = () => setStatus('찍었어요 · 푸는 중… ' + Math.round((Date.now() - started) / 1000) + '초', 'busy');
+  const showElapsed = () => {
+    const sec = Math.round((Date.now() - started) / 1000) + '초';
+    $('busySec').textContent = sec;
+    setStatus('찍었어요 · 푸는 중… ' + sec, 'busy');
+  };
   showElapsed();
   solveTimer = setInterval(showElapsed, 1000);
 
@@ -269,7 +274,6 @@ async function capture() {
     if (e.needsKey) openSettings();
   } finally {
     clearInterval(solveTimer);
-    gauge.classList.remove('spin');
     prevGray = null;
     state = 'shown';
   }
@@ -280,9 +284,9 @@ function fail(userMessage, extra = {}) {
 }
 
 async function solve(imageBase64) {
+  const model = cfg.model;
   const body = {
-    model: cfg.model,
-    reasoning_effort: cfg.effort,
+    model,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       {
@@ -295,17 +299,28 @@ async function solve(imageBase64) {
     ],
   };
 
-  let { res, err } = await postChat(body);
-  // 추론 깊이 옵션을 받지 않는 모델이면 그 옵션만 빼고 한 번 더 보낸다
-  if (res.status === 400 && /reasoning/i.test(err.message || '')) {
-    delete body.reasoning_effort;
+  // 모델마다 받는 추론 깊이 값이 달라서, 가벼운 값부터 차례로 시도하고 통한 값을 기억해 둔다
+  const cacheKey = 'ag_eff_ok:' + model + ':' + cfg.effort;
+  const cached = store.get(cacheKey, null);
+  const tries = cached !== null ? [cached] : [...(EFFORT_TRIES[cfg.effort] || ['low']), ''];
+  let res, err;
+  for (const effort of tries) {
+    if (effort) body.reasoning_effort = effort; else delete body.reasoning_effort;
     ({ res, err } = await postChat(body));
+    if (res.status === 400 && effort && /reasoning/i.test(err.message || '')) {
+      if (cached !== null) { // 기억해 둔 값이 더는 안 통하면 옵션 없이 보내고 다음에 다시 찾는다
+        try { localStorage.removeItem(cacheKey); } catch { /* 무시 */ }
+        delete body.reasoning_effort;
+        ({ res, err } = await postChat(body));
+      } else continue;
+    } else if (res.ok && cached === null) store.set(cacheKey, effort);
+    break;
   }
 
   if (!res.ok) {
     if (res.status === 401) throw fail('API 키가 올바르지 않아요.', { needsKey: true });
     if (res.status === 404 || err.code === 'model_not_found') {
-      throw fail('이 키로는 "' + cfg.model + '" 모델을 쓸 수 없어요.\n설정에서 다른 모델을 고르세요.', { needsKey: true });
+      throw fail('이 키로는 "' + model + '" 모델을 쓸 수 없어요.\n설정에서 다른 모델을 고르세요.', { needsKey: true });
     }
     if (err.code === 'insufficient_quota') throw fail('OpenAI 크레딧이 없어요. 결제 설정을 확인하세요.');
     if (res.status === 429) throw fail('요청이 너무 많아요. 잠시 뒤 다시 시도하세요.');
@@ -462,7 +477,7 @@ $('key').addEventListener('change', loadModels);
 $('settingsForm').addEventListener('submit', () => {
   store.set('ag_key', $('key').value.trim());
   store.set('ag_model', $('model').value);
-  store.set('ag_effort', $('effort').value);
+  store.set('ag_effort2', $('effort').value);
   store.set('ag_sens', $('sens').value);
   store.set('ag_voice', $('voice').checked ? '1' : '0');
 });

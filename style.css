@@ -126,9 +126,30 @@ html, body {
   stroke-dasharray: 276.46;
   stroke-dashoffset: 276.46;
 }
-.gauge.spin { opacity: 1; animation: spin 1s linear infinite; }
-.gauge.spin .gauge-fg { stroke: #60a5fa; stroke-dashoffset: 190; }
-@keyframes spin { to { transform: translate(-50%, -50%) rotate(270deg); } }
+/* 풀이 중: 박스 전체를 파랗게 덮고 큰 글씨로 경과 시간을 보여준다 */
+.box-busy {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 3vw;
+  background: rgba(20, 80, 200, .72);
+  font-size: 8vw;
+  font-weight: 800;
+  animation: shutter .45s ease-out;
+}
+.box.busy .box-busy { display: flex; }
+.busy-sec { min-width: 2.6em; font-variant-numeric: tabular-nums; color: #bfdbfe; }
+.busy-spin {
+  width: 9vw; height: 9vw;
+  border: 1.2vw solid rgba(255, 255, 255, .3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes shutter { from { background: #fff; } }
 
 .panel {
   position: fixed;
@@ -156,10 +177,10 @@ html, body {
   white-space: pre-line;
   word-break: keep-all;
 }
-.answer.xl { font-size: 28vw; line-height: 1.1; }
-.answer.lg { font-size: 13vw; }
-.answer.md { font-size: 8vw; }
-.answer.sm { font-size: 5.5vw; font-weight: 700; align-items: flex-start; }
+.answer.xl { font-size: 15vw; }
+.answer.lg { font-size: 9vw; }
+.answer.md { font-size: 6.5vw; }
+.answer.sm { font-size: 5vw; font-weight: 700; align-items: flex-start; }
 .answer.msg { font-size: 5.5vw; font-weight: 600; color: #fbbf24; }
 
 .settings {
