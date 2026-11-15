@@ -29,16 +29,13 @@
   <form method="dialog" id="settingsForm">
     <h2>설정</h2>
 
-    <label for="key">Claude API 키</label>
-    <input id="key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-ant-…">
+    <label for="key">OpenAI API 키</label>
+    <input id="key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-…">
     <p class="hint">이 폰 브라우저에만 저장됩니다.</p>
 
     <label for="model">모델</label>
-    <select id="model">
-      <option value="claude-opus-5-5">Opus 5.5 (가장 정확)</option>
-      <option value="claude-sonnet-5-5">Sonnet 5.5 (빠름)</option>
-      <option value="claude-haiku-5-5">Haiku 5.5 (가장 빠름)</option>
-    </select>
+    <select id="model"></select>
+    <p id="modelMsg" class="hint">키를 넣으면 쓸 수 있는 모델 목록을 불러옵니다.</p>
 
     <label for="effort">풀이 깊이</label>
     <select id="effort">

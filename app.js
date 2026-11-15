@@ -1,5 +1,8 @@
 'use strict';
 
+const DEFAULT_MODEL = 'gpt-5';
+const API_BASE = 'https://api.openai.com/v1';
+
 // ---------- 설정 저장 ----------
 const store = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
@@ -18,7 +21,7 @@ window.addEventListener('hashchange', importKeyFromHash);
 
 const cfg = {
   get key() { return store.get('ag_key', ''); },
-  get model() { return store.get('ag_model', 'claude-opus-5-5'); },
+  get model() { return store.get('ag_model', DEFAULT_MODEL); },
   get effort() { return store.get('ag_effort', 'medium'); },
   get sens() { return Number(store.get('ag_sens', '3')); },
   get voice() { return store.get('ag_voice', '0') === '1'; },
@@ -214,59 +217,109 @@ function fail(userMessage, extra = {}) {
 }
 
 async function solve(imageBase64) {
-  const model = cfg.model;
-  const headers = {
-    'content-type': 'application/json',
-    'x-api-key': cfg.key,
-    'anthropic-version': '2026-10-21',
-    'anthropic-dangerous-direct-browser-access': 'true',
-  };
   const body = {
-    model,
-    max_tokens: 8000,
-    output_config: { effort: cfg.effort },
-    system: SYSTEM_PROMPT,
-    messages: [{
-      role: 'user',
-      content: [
-        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
-        { type: 'text', text: '이 사진의 문제를 풀고 정답만 출력해.' },
-      ],
-    }],
+    model: cfg.model,
+    reasoning_effort: cfg.effort,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '이 사진의 문제를 풀고 정답만 출력해.' },
+          { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + imageBase64, detail: 'high' } },
+        ],
+      },
+    ],
   };
-  // 안전 분류기가 요청을 거절하면 서버가 다른 모델로 자동 재시도 (Haiku는 지원하지 않음)
-  if (model !== 'claude-haiku-5-5') {
-    headers['anthropic-beta'] = 'server-side-fallback-2026-07-01';
-    body.fallbacks = 'default';
-  }
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-  let res;
-  try {
-    res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal,
-    });
-  } catch (e) {
-    throw fail(e.name === 'AbortError' ? '시간이 너무 오래 걸려요. 탭해서 다시 시도하세요.' : '인터넷 연결을 확인해 주세요.');
-  } finally {
-    clearTimeout(timer);
+  let { res, err } = await postChat(body);
+  // 추론 깊이 옵션을 받지 않는 모델이면 그 옵션만 빼고 한 번 더 보낸다
+  if (res.status === 400 && /reasoning/i.test(err.message || '')) {
+    delete body.reasoning_effort;
+    ({ res, err } = await postChat(body));
   }
 
   if (!res.ok) {
-    let detail = '';
-    try { detail = (await res.json())?.error?.message || ''; } catch { /* 본문 없음 */ }
-    if (res.status === 401 || res.status === 403) throw fail('API 키가 올바르지 않아요.', { needsKey: true });
+    if (res.status === 401) throw fail('API 키가 올바르지 않아요.', { needsKey: true });
+    if (res.status === 404 || err.code === 'model_not_found') {
+      throw fail('이 키로는 "' + cfg.model + '" 모델을 쓸 수 없어요.\n설정에서 다른 모델을 고르세요.', { needsKey: true });
+    }
+    if (err.code === 'insufficient_quota') throw fail('OpenAI 크레딧이 없어요. 결제 설정을 확인하세요.');
     if (res.status === 429) throw fail('요청이 너무 많아요. 잠시 뒤 다시 시도하세요.');
     if (res.status >= 500) throw fail('AI 서버가 바빠요. 잠시 뒤 다시 시도하세요.');
-    throw fail('요청 오류 (' + res.status + ')' + (detail ? '\n' + detail : ''));
+    throw fail('요청 오류 (' + res.status + ')' + (err.message ? '\n' + err.message : ''));
   }
 
-  const data = await res.json();
-  if (data.stop_reason === 'refusal') throw fail('이 문제는 풀 수 없어요.');
-  const text = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
+  const msg = res.data?.choices?.[0]?.message;
+  if (msg?.refusal) throw fail('이 문제는 풀 수 없어요.');
+  const text = (typeof msg?.content === 'string' ? msg.content : '').trim();
   if (!text) throw fail('답을 받지 못했어요. 탭해서 다시 시도하세요.');
   return text;
+}
+
+async function postChat(body) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const r = await fetch(API_BASE + '/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + cfg.key },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    let data = null;
+    try { data = await r.json(); } catch { /* 본문 없음 */ }
+    return { res: { ok: r.ok, status: r.status, data }, err: data?.error || {} };
+  } catch (e) {
+    if (e.name === 'AbortError') throw fail('시간이 너무 오래 걸려요. 탭해서 다시 시도하세요.');
+    throw await explainBlockedRequest();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// OpenAI는 일부 오류 응답(잘못된 키 등)을 브라우저가 읽지 못하게 보내서 연결 실패처럼 보인다.
+// 읽을 수 있는 모델 목록 요청으로 실제 원인을 가려낸다.
+async function explainBlockedRequest() {
+  try {
+    const r = await fetch(API_BASE + '/models', { headers: { authorization: 'Bearer ' + cfg.key } });
+    if (r.status === 401) return fail('API 키가 올바르지 않아요.', { needsKey: true });
+    return fail('요청이 거절됐어요.\n설정에서 모델과 OpenAI 크레딧을 확인하세요.', { needsKey: true });
+  } catch {
+    return fail('인터넷 연결을 확인해 주세요.');
+  }
+}
+
+// 입력한 키로 쓸 수 있는 대화형 모델 목록을 불러와 선택 상자를 채운다
+const NOT_CHAT = /audio|realtime|tts|transcribe|image|embedding|moderation|instruct|search|codex|whisper|dall-e|sora/i;
+function fillModels(ids, selected) {
+  const sel = $('model');
+  const list = ids.includes(selected) ? ids : [selected, ...ids];
+  sel.replaceChildren(...list.map((id) => new Option(id, id, false, id === selected)));
+}
+
+async function loadModels() {
+  const key = $('key').value.trim();
+  const msg = $('modelMsg');
+  const current = $('model').value || cfg.model;
+  if (!key) { msg.textContent = '키를 넣으면 쓸 수 있는 모델 목록을 불러옵니다.'; return; }
+  msg.textContent = '모델 목록 불러오는 중…';
+  try {
+    const r = await fetch(API_BASE + '/models', { headers: { authorization: 'Bearer ' + key } });
+    if (r.status === 401) { msg.textContent = 'API 키가 올바르지 않아요.'; return; }
+    if (!r.ok) throw new Error(String(r.status));
+    const ids = ((await r.json()).data || [])
+      .map((m) => m.id)
+      .filter((id) => /^(gpt-|o\d|chatgpt)/.test(id) && !NOT_CHAT.test(id))
+      .sort()
+      .reverse();
+    fillModels(ids, current);
+    msg.textContent = ids.includes(current)
+      ? '모델 ' + ids.length + '개를 불러왔어요.'
+      : '"' + current + '" 모델은 이 키로 쓸 수 없어요. 목록에서 다른 모델을 고르세요.';
+  } catch {
+    msg.textContent = '모델 목록을 불러오지 못했어요.';
+  }
 }
 
 // ---------- 답 표시 ----------
@@ -317,7 +370,8 @@ document.addEventListener('click', (e) => {
 function openSettings() {
   if (settings.open) return;
   $('key').value = cfg.key;
-  $('model').value = cfg.model;
+  fillModels([], cfg.model);
+  loadModels();
   $('effort').value = cfg.effort;
   $('sens').value = String(cfg.sens);
   $('voice').checked = cfg.voice;
@@ -326,6 +380,7 @@ function openSettings() {
 }
 
 $('openSettings').addEventListener('click', openSettings);
+$('key').addEventListener('change', loadModels);
 
 $('settingsForm').addEventListener('submit', () => {
   store.set('ag_key', $('key').value.trim());
