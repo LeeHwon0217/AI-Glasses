@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>AI 안경</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<video id="video" autoplay playsinline muted></video>
+
+<header class="top">
+  <div id="status" class="status">카메라 켜는 중…</div>
+  <button id="openSettings" class="icon-btn" aria-label="설정">⚙</button>
+</header>
+
+<svg id="gauge" class="gauge" viewBox="0 0 100 100" aria-hidden="true">
+  <circle class="gauge-bg" cx="50" cy="50" r="44"></circle>
+  <circle id="gaugeFg" class="gauge-fg" cx="50" cy="50" r="44"></circle>
+</svg>
+
+<section id="answer" class="answer" hidden aria-live="polite"></section>
+
+<dialog id="settings" class="settings">
+  <form method="dialog" id="settingsForm">
+    <h2>설정</h2>
+
+    <label for="key">Claude API 키</label>
+    <input id="key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-ant-…">
+    <p class="hint">이 폰 브라우저에만 저장됩니다.</p>
+
+    <label for="model">모델</label>
+    <select id="model">
+      <option value="claude-opus-5-5">Opus 5.5 (가장 정확)</option>
+      <option value="claude-sonnet-5-5">Sonnet 5.5 (빠름)</option>
+      <option value="claude-haiku-5-5">Haiku 5.5 (가장 빠름)</option>
+    </select>
+
+    <label for="effort">풀이 깊이</label>
+    <select id="effort">
+      <option value="low">빠르게</option>
+      <option value="medium">보통</option>
+      <option value="high">꼼꼼하게</option>
+    </select>
+
+    <label for="sens">멈춤 감지 (왼쪽일수록 완전히 멈춰야 촬영)</label>
+    <input id="sens" type="range" min="1" max="5" step="1">
+
+    <label class="row"><input id="voice" type="checkbox"> 답을 음성으로 읽어주기</label>
+
+    <div class="buttons">
+      <button type="button" id="copyLink" class="ghost">설정 링크 복사</button>
+      <button type="submit" id="save" class="primary">저장</button>
+    </div>
+    <p id="settingsMsg" class="hint"></p>
+  </form>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
