@@ -181,6 +181,7 @@ html, body {
 .answer.lg { font-size: 9vw; }
 .answer.md { font-size: 6.5vw; }
 .answer.sm { font-size: 5vw; font-weight: 700; align-items: flex-start; }
+.answer.guide { font-size: 5.5vw; font-weight: 600; color: #d4d4d8; line-height: 1.5; }
 .answer.msg { font-size: 5.5vw; font-weight: 600; color: #fbbf24; }
 
 .settings {

@@ -22,7 +22,7 @@ window.addEventListener('hashchange', importKeyFromHash);
 const cfg = {
   get key() { return store.get('ag_key', ''); },
   get model() { return store.get('ag_model', DEFAULT_MODEL); },
-  get effort() { return store.get('ag_effort2', 'fast'); },
+  get effort() { return store.get('ag_effort3', 'low'); },
   get sens() { return Number(store.get('ag_sens', '3')); },
   get voice() { return store.get('ag_voice', '0') === '1'; },
 };
@@ -33,19 +33,21 @@ const TICK_MS = 100;            // 움직임 검사 주기
 const SMALL_W = 64, SMALL_H = 48;
 const THRESHOLDS = [3, 5, 7, 10, 14]; // 민감도 1~5 → 허용 픽셀 차이(0~255)
 const MIN_CONTRAST = 8;         // 이보다 밋밋한 화면(렌즈 가림, 빈 벽)은 무시
-const MAX_SIDE = 1280;          // 전송 이미지 긴 변
+const MAX_SIDE = 1568;          // 전송 이미지 긴 변
 const REQUEST_TIMEOUT_MS = 120000;
+const CHANGE_THR = 22;         // 답을 보는 중 화면이 찍은 장면과 이만큼 달라지면 다른 문제로 본다
+const CHANGE_MS = 400;          // 그 상태가 이만큼 이어지면 답을 지운다
 // 풀이 깊이 설정 → 보내 볼 reasoning_effort 값 (앞에서부터 시도)
 const EFFORT_TRIES = { fast: ['minimal', 'none', 'low'], low: ['low'], medium: ['medium'], high: ['high'] };
 
 const SYSTEM_PROMPT = `너는 휴대폰 카메라로 찍은 객관식 문제를 푸는 도우미다. 네 출력은 가공 없이 화면에 아주 큰 글씨로 그대로 표시되고, 사용자는 풀이 없이 정답 번호만 한눈에 보고 싶어 한다.
 
 출력 규칙:
-- 사진에 문제가 하나면 정답 선택지의 번호를 "3번" 형식으로만 출력한다. 선택지가 ①②③이든 1) 2) 3)이든 숫자와 "번"으로 쓴다. 선택지가 A, B, C 같은 글자면 "B" 처럼 글자만 쓴다.
-- 문제가 여러 개 보이면 한 줄에 하나씩 "문제번호: 정답" 형식으로 출력한다. 예:
-12: 3번
-13: 1번
-- 선택지가 없는 주관식·단답형이면 답만 짧게 출력한다.
+- 문제마다 한 줄씩 "문제번호번: 정답" 형식으로 출력한다. 정답은 선택지 번호를 숫자로만 쓴다(①②③이든 1) 2) 3)이든 숫자). 예를 들어 12번 문제의 정답이 ③이면:
+12번: 3
+- 문제가 여러 개 보이면 문제 번호 순서대로 줄을 나눠 모두 출력한다.
+- 문제 번호가 사진에 보이지 않으면 "정답: 3" 형식으로 출력한다.
+- 선택지가 A, B, C 같은 글자면 정답 자리에 그 글자를 쓴다. 선택지가 없는 주관식·단답형이면 정답 자리에 답만 짧게 쓴다.
 - 사진이 흐리거나 잘려서 문제를 읽을 수 없거나 문제가 아예 없으면 NONE 이라고만 출력한다.
 - 문제 내용, 풀이, 설명, 인사말, 마크다운은 출력하지 않는다. 신중하게 풀되 출력은 정답뿐이다.`;
 
@@ -73,6 +75,8 @@ let prevGray = null;
 let stillMs = 0;
 let cameraReady = false;
 let solveTimer = null;
+let refGray = null;   // 마지막으로 찍은 장면 (다른 문제를 비췄는지 비교용)
+let changedMs = 0;
 
 function setStatus(text, kind = '') {
   statusEl.textContent = text;
@@ -103,6 +107,7 @@ async function startCamera() {
     await video.play().catch(() => {});
     cameraReady = true;
     idleStatus();
+    showGuide();
     keepAwake();
   } catch (e) {
     const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
@@ -213,7 +218,13 @@ function tick() {
   const diff = prevGray ? meanDiff(gray, prevGray) : Infinity;
   prevGray = gray;
 
-  if (state === 'shown') return; // 답을 보는 동안은 탭할 때까지 기다린다
+  if (state === 'shown') { // 답을 보는 동안: 다른 문제를 비추면 답을 지우고 다음 문제를 기다린다
+    if (refGray && meanDiff(gray, refGray) > CHANGE_THR) {
+      changedMs += TICK_MS;
+      if (changedMs >= CHANGE_MS) nextProblem();
+    } else changedMs = 0;
+    return;
+  }
 
   if (diff > thr || contrast(gray) < MIN_CONTRAST || !cfg.key) {
     stillMs = 0;
@@ -237,7 +248,7 @@ function grabJpegBase64() {
   big.width = Math.round(r.w * scale);
   big.height = Math.round(r.h * scale);
   big.getContext('2d').drawImage(video, r.x, r.y, r.w, r.h, 0, 0, big.width, big.height);
-  return big.toDataURL('image/jpeg', 0.85).split(',')[1];
+  return big.toDataURL('image/jpeg', 0.9).split(',')[1];
 }
 
 async function capture() {
@@ -247,6 +258,8 @@ async function capture() {
   state = 'solving';
   stillMs = 0;
   const image = grabJpegBase64();
+  refGray = video.videoWidth ? readGray() : null;
+  changedMs = 0;
 
   panel.hidden = true;
   setGauge(0);
@@ -266,7 +279,7 @@ async function capture() {
     const text = await solve(image);
     const solved = showAnswer(text);
     setBox(solved ? 'done' : '');
-    setStatus(solved ? '✅ 풀이 끝 · 다음 문제는 탭' : '못 읽었어요 · 탭하면 다시 찍어요', solved ? '' : 'err');
+    setStatus(solved ? '✅ 풀이 끝 · 다른 문제를 비추세요' : '못 읽었어요 · 탭하면 다시 찍어요', solved ? '' : 'err');
   } catch (e) {
     showMessage(e.userMessage || '풀이에 실패했어요. 화면을 탭하면 다시 시도해요.');
     setBox('');
@@ -411,7 +424,7 @@ function showAnswer(text) {
   const lines = answer.split('\n').map((l) => l.trim()).filter(Boolean);
   const longest = Math.max(...lines.map((l) => l.length));
   let size = 'sm';
-  if (lines.length === 1 && longest <= 3) size = 'xl';
+  if (lines.length === 1 && longest <= 8) size = 'xl';
   else if (lines.length <= 4 && longest <= 9) size = 'lg';
   else if (lines.length <= 7 && longest <= 14) size = 'md';
 
@@ -421,6 +434,23 @@ function showAnswer(text) {
   navigator.vibrate?.([60, 60, 60]);
   speak(lines.join(', '));
   return true;
+}
+
+// 답을 지우고 다음 문제를 기다린다
+function nextProblem() {
+  state = 'watch';
+  stillMs = 0;
+  changedMs = 0;
+  prevGray = null;
+  setBox('');
+  idleStatus();
+  showGuide();
+}
+
+function showGuide() {
+  answerEl.textContent = '문제를 박스에 맞춘 뒤\n1초 정지하세요.\n아니면 화면을 탭하세요.';
+  answerEl.className = 'answer guide';
+  panel.hidden = false;
 }
 
 function showMessage(text) {
@@ -446,15 +476,7 @@ document.addEventListener('click', (e) => {
   if (settings.open || e.target.closest('.top') || e.target.closest('.box-handle')) return;
   if (!cameraReady || state === 'solving') return;
   if (cfg.voice && window.speechSynthesis) speechSynthesis.resume(); // iOS 음성 잠금 해제
-  if (state === 'shown') {
-    panel.hidden = true;
-    state = 'watch';
-    stillMs = 0;
-    prevGray = null;
-    setBox('');
-    idleStatus();
-    return;
-  }
+  if (state === 'shown') { nextProblem(); return; }
   capture();
 });
 
@@ -477,7 +499,7 @@ $('key').addEventListener('change', loadModels);
 $('settingsForm').addEventListener('submit', () => {
   store.set('ag_key', $('key').value.trim());
   store.set('ag_model', $('model').value);
-  store.set('ag_effort2', $('effort').value);
+  store.set('ag_effort3', $('effort').value);
   store.set('ag_sens', $('sens').value);
   store.set('ag_voice', $('voice').checked ? '1' : '0');
 });
