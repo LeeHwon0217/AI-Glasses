@@ -18,12 +18,18 @@
   <button id="openSettings" class="icon-btn" aria-label="설정">⚙</button>
 </header>
 
-<svg id="gauge" class="gauge" viewBox="0 0 100 100" aria-hidden="true">
-  <circle class="gauge-bg" cx="50" cy="50" r="44"></circle>
-  <circle id="gaugeFg" class="gauge-fg" cx="50" cy="50" r="44"></circle>
-</svg>
+<div id="box" class="box">
+  <span id="boxHint" class="box-hint">이 박스 안에 문제를 넣어주세요</span>
+  <svg id="gauge" class="gauge" viewBox="0 0 100 100" aria-hidden="true">
+    <circle class="gauge-bg" cx="50" cy="50" r="44"></circle>
+    <circle id="gaugeFg" class="gauge-fg" cx="50" cy="50" r="44"></circle>
+  </svg>
+</div>
 
-<section id="answer" class="answer" hidden aria-live="polite"></section>
+<section id="panel" class="panel" hidden aria-live="polite">
+  <div id="read" class="read" hidden></div>
+  <div id="answer" class="answer"></div>
+</section>
 
 <dialog id="settings" class="settings">
   <form method="dialog" id="settingsForm">
