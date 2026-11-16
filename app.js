@@ -50,7 +50,7 @@ const SYSTEM_PROMPT = `너는 휴대폰 카메라로 찍은 객관식 문제를 
 출력 규칙:
 - 문제마다 한 줄씩 "문제번호번: 정답" 형식으로 출력한다. 정답은 선택지 번호를 숫자로만 쓴다(①②③이든 1) 2) 3)이든 숫자). 예를 들어 12번 문제의 정답이 ③이면:
 12번: 3
-- 문제가 여러 개 보이면 문제 번호 순서대로 줄을 나눠 모두 출력한다.
+- 사진은 사용자가 풀고 싶은 문제 하나에 박스를 맞춰 찍은 것이다. 위아래나 옆에 다른 문제가 일부 또는 전부 함께 찍혀 있어도, 사진 한가운데에 가장 가깝고 온전히 보이는 문제 하나만 푼다. 나머지 문제는 무시하고 언급하지 않는다. 출력은 반드시 한 줄이다.
 - 문제 번호가 사진에 보이지 않으면 "정답: 3" 형식으로 출력한다.
 - 선택지가 A, B, C 같은 글자면 정답 자리에 그 글자를 쓴다. 선택지가 없는 주관식·단답형이면 정답 자리에 답만 짧게 쓴다.
 - 사진이 흐리거나 잘려서 문제를 읽을 수 없거나 문제가 아예 없으면 NONE 이라고만 출력한다.
@@ -314,7 +314,7 @@ async function solve(imageBase64) {
       {
         role: 'user',
         content: [
-          { type: 'text', text: '이 사진의 문제를 풀고 정답만 출력해.' },
+          { type: 'text', text: '이 사진 가운데에 있는 문제 하나만 풀고 정답만 출력해.' },
           { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + imageBase64, detail: 'high' } },
         ],
       },
@@ -452,7 +452,9 @@ function showAnswer(text) {
     showMessage('문제를 읽지 못했어요.\n박스 안에 더 가까이, 또렷하게 넣어주세요.');
     return false;
   }
-  const lines = answer.split('\n').map((l) => l.trim()).filter(Boolean);
+  // 문제 하나만 풀게 했지만, 여러 줄이 오면 "N번: 답" 꼴의 줄은 첫 줄만 남긴다
+  let lines = answer.split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.length > 1 && lines.every((l) => /^.{1,12}:/.test(l))) lines = lines.slice(0, 1);
   const longest = Math.max(...lines.map((l) => l.length));
   let size = 'sm';
   if (lines.length === 1 && longest <= 8) size = 'xl';
