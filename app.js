@@ -24,14 +24,18 @@ const store = {
 };
 
 // 설정 링크(#key=...)로 열면 키를 저장하고 주소창에서 지운다
+// #mat=... 은 저장소에 암호화해서 올려 둔 교안을 푸는 열쇠
 function importKeyFromHash() {
-  const m = location.hash.match(/key=([^&]+)/);
-  if (!m) return;
-  store.set('ag_key', decodeURIComponent(m[1]));
+  const k = location.hash.match(/[#&]key=([^&]+)/);
+  const m = location.hash.match(/[#&]mat=([^&]+)/);
+  if (!k && !m) return false;
+  if (k) store.set('ag_key', decodeURIComponent(k[1]));
+  if (m) { store.set('ag_matkey', decodeURIComponent(m[1])); store.set('ag_matver', ''); }
   history.replaceState(null, '', location.pathname + location.search);
+  return Boolean(m);
 }
 importKeyFromHash();
-window.addEventListener('hashchange', importKeyFromHash);
+window.addEventListener('hashchange', () => { if (importKeyFromHash()) syncMaterials(); });
 
 const cfg = {
   get key() { return store.get('ag_key', ''); },
@@ -124,6 +128,35 @@ async function fillSubjects() {
   if (current && !names.includes(current)) store.set('ag_subject', '');
   await loadSubject();
   return names;
+}
+
+// 저장소의 암호화된 교안(materials.enc)을 받아 풀어서 이 폰에 저장한다.
+// 열쇠가 없으면 아무것도 하지 않고, 이미 같은 판을 받았으면 다시 풀지 않는다.
+let matSyncNote = '';
+async function syncMaterials() {
+  const k = store.get('ag_matkey', '');
+  if (!k || !window.crypto?.subtle) return;
+  try {
+    const r = await fetch('materials.enc', { cache: 'no-cache' });
+    if (!r.ok) throw new Error(String(r.status));
+    const ver = r.headers.get('etag') || r.headers.get('last-modified') || '';
+    const have = await matNames().catch(() => []);
+    if (ver && ver === store.get('ag_matver', '') && have.length) return;
+    const buf = new Uint8Array(await r.arrayBuffer());
+    const raw = Uint8Array.from(atob(k.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+    const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+    const gz = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, key, buf.slice(12));
+    const json = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+    const subjects = (JSON.parse(json).subjects || []).filter((x) => x && x.name && x.text);
+    await matReplace(subjects);
+    store.set('ag_matver', ver);
+    const names = await fillSubjects();
+    matSyncNote = '';
+    if (state === 'watch') setStatus('교안 ' + names.length + '과목 받았어요 · 과목을 고르세요');
+  } catch {
+    matSyncNote = '교안을 받지 못했어요. 설정 링크를 다시 열어 보세요.';
+    if (state === 'watch') setStatus('교안을 받지 못했어요', 'err');
+  }
 }
 
 // ---------- 화면 요소 ----------
@@ -748,7 +781,7 @@ $('matFile').addEventListener('change', async (e) => {
 async function showMatStatus() {
   let names = [];
   try { names = await matNames(); } catch { /* 무시 */ }
-  $('matMsg').textContent = names.length ? '저장된 과목 ' + names.length + '개: ' + names.join(', ') : '아직 불러온 교안이 없어요.';
+  $('matMsg').textContent = matSyncNote ? matSyncNote : names.length ? '저장된 과목 ' + names.length + '개: ' + names.join(', ') : '아직 불러온 교안이 없어요.';
 }
 $('key').addEventListener('change', loadModels);
 
@@ -769,7 +802,8 @@ $('copyLink').addEventListener('click', async () => {
   const key = $('key').value.trim();
   const msg = $('settingsMsg');
   if (!key) { msg.textContent = '먼저 API 키를 입력하세요.'; return; }
-  const link = location.origin + location.pathname + '#key=' + encodeURIComponent(key);
+  const matKey = store.get('ag_matkey', '');
+  const link = location.origin + location.pathname + '#key=' + encodeURIComponent(key) + (matKey ? '&mat=' + encodeURIComponent(matKey) : '');
   try {
     await navigator.clipboard.writeText(link);
     msg.textContent = '복사했어요. 이 링크를 연 폰에 키가 저장됩니다. 믿을 수 있는 사람에게만 보내세요.';
@@ -780,6 +814,6 @@ $('copyLink').addEventListener('click', async () => {
 
 // ---------- 시작 ----------
 setInterval(tick, TICK_MS);
-fillSubjects();
+fillSubjects().then(syncMaterials);
 startCamera().then(() => { if (!cfg.key) openSettings(); });
 if (cfg.key) fetchModelIds(cfg.key).catch(() => {}); // 가장 좋은 모델 이름을 최신으로

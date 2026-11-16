@@ -1,16 +1,25 @@
-"""교안 PDF에서 글자를 뽑아 앱이 불러올 수 있는 '교안.json' 한 파일로 만든다.
+"""교안 PDF에서 글자를 뽑아 앱이 쓸 수 있는 파일로 만든다.
 
 사용법:  python tools/make_materials.py "PDF가 있는 폴더"
-결과물:  교안/교안.json  (저작권이 있는 자료라 저장소에는 올리지 않는다. .gitignore 참고)
-필요:    pip install pymupdf
+필요:    pip install pymupdf cryptography
+
+만드는 것:
+  교안/교안.json      글자 원문 (저작권 자료라 저장소에 올리지 않는다. .gitignore 참고)
+  교안/key.txt        암호화 열쇠 (올리지 않는다. 있으면 다시 써서 설정 링크가 그대로 유지된다)
+  교안/설정링크.txt   폰에서 한 번 열면 교안이 받아지는 링크 (열쇠가 들어 있으니 올리지 않는다)
+  materials.enc       교안.json을 압축하고 AES-256-GCM으로 암호화한 파일 (이것만 저장소에 올린다)
 """
+import base64
+import gzip
 import io
 import json
 import os
 import sys
 
 import fitz  # PyMuPDF
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+SITE = 'https://leehwon0217.github.io/AI-Glasses/'
 SUBJECTS = ['언어교수이론', '한국어표현교육론', '한국어 교육과정론', '한국어 교재론',
             '한국어 어휘교육론', '외국어 습득론', '한국민속학']
 
@@ -28,8 +37,10 @@ def extract(path):
 def main():
     sys.stdout.reconfigure(encoding='utf-8')
     src = sys.argv[1] if len(sys.argv) > 1 else '.'
-    out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '교안')
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out_dir = os.path.join(root, '교안')
     os.makedirs(out_dir, exist_ok=True)
+
     subjects = []
     for name in SUBJECTS:
         path = os.path.join(src, name + '.pdf')
@@ -39,10 +50,26 @@ def main():
         text = extract(path)
         subjects.append({'name': name, 'text': text})
         print('%s: %d자' % (name, len(text)))
-    out = os.path.join(out_dir, '교안.json')
-    with io.open(out, 'w', encoding='utf-8') as f:
-        json.dump({'subjects': subjects}, f, ensure_ascii=False)
-    print('저장:', out, '(%.1f MB)' % (os.path.getsize(out) / 1e6))
+    data = json.dumps({'subjects': subjects}, ensure_ascii=False).encode('utf-8')
+    with io.open(os.path.join(out_dir, '교안.json'), 'wb') as f:
+        f.write(data)
+
+    key_path = os.path.join(out_dir, 'key.txt')
+    if os.path.exists(key_path):
+        key_text = io.open(key_path, encoding='ascii').read().strip()
+    else:
+        key_text = base64.urlsafe_b64encode(os.urandom(32)).decode('ascii').rstrip('=')
+        io.open(key_path, 'w', encoding='ascii').write(key_text)
+    key = base64.urlsafe_b64decode(key_text + '=' * (-len(key_text) % 4))
+
+    iv = os.urandom(12)
+    enc = iv + AESGCM(key).encrypt(iv, gzip.compress(data, mtime=0), None)
+    with io.open(os.path.join(root, 'materials.enc'), 'wb') as f:
+        f.write(enc)
+    io.open(os.path.join(out_dir, '설정링크.txt'), 'w', encoding='utf-8').write(SITE + '#mat=' + key_text + '\n')
+
+    print('materials.enc: %.2f MB (저장소에 올리는 파일)' % (len(enc) / 1e6))
+    print('설정 링크: 교안/설정링크.txt (폰에서 한 번 열기)')
 
 
 if __name__ == '__main__':
