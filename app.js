@@ -131,7 +131,7 @@ document.addEventListener('visibilitychange', () => {
 
 function idleStatus() {
   if (!cfg.key) setStatus('설정(⚙)에서 API 키를 넣어주세요', 'err');
-  else setStatus('박스에 문제를 넣고 1초 멈추세요');
+  else setStatus('박스에 문제를 넣고 탭하세요');
 }
 
 // ---------- 박스 영역 ----------
@@ -224,28 +224,15 @@ function tick() {
   const diff = prevGray ? meanDiff(gray, prevGray) : Infinity;
   prevGray = gray;
 
-  if (state === 'shown') { // 답을 보는 동안: 다른 문제를 비추면 답을 지우고 다음 문제를 기다린다
+  if (state !== 'shown') return; // 촬영은 화면을 탭할 때만 한다
+
+  { // 답을 보는 동안: 다른 문제를 비추면 답을 지우고 다음 문제를 기다린다
     if (Date.now() - shownAt < 600) return; // 답이 뜰 때의 진동으로 흔들린 것은 무시
     // 폰이 움직이고 있거나, 찍은 장면과 달라졌으면 다른 문제로 넘어가는 것으로 본다
     const moved = diff > thr || (refGray && meanDiff(gray, refGray) > CHANGE_THR);
     changedMs = moved ? changedMs + TICK_MS : 0;
     if (changedMs >= CHANGE_MS) nextProblem();
-    return;
   }
-
-  if (diff > thr || contrast(gray) < MIN_CONTRAST || !cfg.key) {
-    stillMs = 0;
-    setGauge(0);
-    setBox('');
-    return;
-  }
-
-  stillMs += TICK_MS;
-  setGauge(stillMs / STILL_MS);
-  setBox('hold');
-  if (stillMs < STILL_MS) return;
-
-  capture();
 }
 
 // ---------- 촬영과 풀이 ----------
@@ -286,7 +273,7 @@ async function capture() {
     const text = await solve(image);
     const solved = showAnswer(text);
     setBox(solved ? 'done' : '');
-    setStatus(solved ? '✅ 풀이 끝 · 다른 문제를 비추세요' : '못 읽었어요 · 탭하면 다시 찍어요', solved ? '' : 'err');
+    setStatus(solved ? '✅ 풀이 끝 · 다음 문제 넣고 탭' : '못 읽었어요 · 탭하면 다시 찍어요', solved ? '' : 'err');
   } catch (e) {
     showMessage(e.userMessage || '풀이에 실패했어요. 화면을 탭하면 다시 시도해요.');
     setBox('');
@@ -518,7 +505,7 @@ function nextProblem() {
 }
 
 function showGuide() {
-  answerEl.textContent = '문제를 박스에 맞춘 뒤\n1초 정지하세요.\n아니면 화면을 탭하세요.';
+  answerEl.textContent = '문제를 박스에 맞춘 뒤\n화면을 탭하세요.';
   answerEl.className = 'answer guide';
   panel.hidden = false;
 }
@@ -540,13 +527,12 @@ function speak(text) {
 }
 
 // ---------- 화면 탭 ----------
-// 답이 떠 있을 때: 이전 답을 지우고 다음 문제를 기다린다 (박스에 문제가 멈춰 있으면 1초 뒤 자동 촬영)
+// 탭하면 박스 안을 찍어서 푼다. 답이 떠 있을 때 탭해도 곧바로 다음 문제를 찍는다.
 // 대기 중일 때: 기다리지 않고 바로 찍는다
 document.addEventListener('click', (e) => {
   if (settings.open || e.target.closest('.top') || e.target.closest('.box-handle') || e.target.closest('.hist')) return;
   if (!cameraReady || state === 'solving') return;
   if (cfg.voice && window.speechSynthesis) speechSynthesis.resume(); // iOS 음성 잠금 해제
-  if (state === 'shown') { nextProblem(); return; }
   capture();
 });
 
@@ -557,7 +543,6 @@ function openSettings() {
   fillModels([], cfg.modelChoice);
   loadModels();
   $('effort').value = cfg.effort;
-  $('sens').value = String(cfg.sens);
   $('voice').checked = cfg.voice;
   $('settingsMsg').textContent = '';
   settings.showModal();
@@ -570,7 +555,6 @@ $('settingsForm').addEventListener('submit', () => {
   store.set('ag_key', $('key').value.trim());
   store.set('ag_model2', $('model').value);
   store.set('ag_effort4', $('effort').value);
-  store.set('ag_sens', $('sens').value);
   store.set('ag_voice', $('voice').checked ? '1' : '0');
 });
 
