@@ -32,6 +32,11 @@
   <div id="boxHandle" class="box-handle" aria-label="박스 크기 조절"></div>
 </div>
 
+<aside id="hist" class="hist" hidden>
+  <div id="histList" class="hist-list"></div>
+  <button id="histClear" class="hist-clear" type="button">기록 지우기</button>
+</aside>
+
 <section id="panel" class="panel" hidden aria-live="polite">
   <div id="answer" class="answer"></div>
 </section>
@@ -51,8 +56,8 @@
     <label for="effort">풀이 깊이</label>
     <select id="effort">
       <option value="fast">가장 빠르게 (부정확)</option>
-      <option value="low">빠르게 (추천)</option>
-      <option value="medium">보통</option>
+      <option value="low">빠르게</option>
+      <option value="medium">보통 (추천)</option>
       <option value="high">꼼꼼하게</option>
     </select>
 

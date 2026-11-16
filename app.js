@@ -21,8 +21,13 @@ window.addEventListener('hashchange', importKeyFromHash);
 
 const cfg = {
   get key() { return store.get('ag_key', ''); },
-  get model() { return store.get('ag_model', DEFAULT_MODEL); },
-  get effort() { return store.get('ag_effort3', 'low'); },
+  // 'auto'면 이 키로 쓸 수 있는 가장 좋은 모델을 쓴다
+  get modelChoice() { return store.get('ag_model2', 'auto'); },
+  get model() {
+    const m = this.modelChoice;
+    return m === 'auto' ? store.get('ag_best', DEFAULT_MODEL) : m;
+  },
+  get effort() { return store.get('ag_effort4', 'medium'); },
   get sens() { return Number(store.get('ag_sens', '3')); },
   get voice() { return store.get('ag_voice', '0') === '1'; },
 };
@@ -35,8 +40,8 @@ const THRESHOLDS = [3, 5, 7, 10, 14]; // 민감도 1~5 → 허용 픽셀 차이(
 const MIN_CONTRAST = 8;         // 이보다 밋밋한 화면(렌즈 가림, 빈 벽)은 무시
 const MAX_SIDE = 1568;          // 전송 이미지 긴 변
 const REQUEST_TIMEOUT_MS = 120000;
-const CHANGE_THR = 22;         // 답을 보는 중 화면이 찍은 장면과 이만큼 달라지면 다른 문제로 본다
-const CHANGE_MS = 400;          // 그 상태가 이만큼 이어지면 답을 지운다
+const CHANGE_THR = 12;         // 답을 보는 중 화면이 찍은 장면과 이만큼 달라지면 다른 문제로 본다
+const CHANGE_MS = 300;          // 그 상태가 이만큼 이어지면 답을 지운다
 // 풀이 깊이 설정 → 보내 볼 reasoning_effort 값 (앞에서부터 시도)
 const EFFORT_TRIES = { fast: ['minimal', 'none', 'low'], low: ['low'], medium: ['medium'], high: ['high'] };
 
@@ -77,6 +82,7 @@ let cameraReady = false;
 let solveTimer = null;
 let refGray = null;   // 마지막으로 찍은 장면 (다른 문제를 비췄는지 비교용)
 let changedMs = 0;
+let shownAt = 0;
 
 function setStatus(text, kind = '') {
   statusEl.textContent = text;
@@ -219,10 +225,11 @@ function tick() {
   prevGray = gray;
 
   if (state === 'shown') { // 답을 보는 동안: 다른 문제를 비추면 답을 지우고 다음 문제를 기다린다
-    if (refGray && meanDiff(gray, refGray) > CHANGE_THR) {
-      changedMs += TICK_MS;
-      if (changedMs >= CHANGE_MS) nextProblem();
-    } else changedMs = 0;
+    if (Date.now() - shownAt < 600) return; // 답이 뜰 때의 진동으로 흔들린 것은 무시
+    // 폰이 움직이고 있거나, 찍은 장면과 달라졌으면 다른 문제로 넘어가는 것으로 본다
+    const moved = diff > thr || (refGray && meanDiff(gray, refGray) > CHANGE_THR);
+    changedMs = moved ? changedMs + TICK_MS : 0;
+    if (changedMs >= CHANGE_MS) nextProblem();
     return;
   }
 
@@ -288,6 +295,8 @@ async function capture() {
   } finally {
     clearInterval(solveTimer);
     prevGray = null;
+    changedMs = 0;
+    shownAt = Date.now();
     state = 'shown';
   }
 }
@@ -385,31 +394,53 @@ async function explainBlockedRequest() {
 const NOT_CHAT = /audio|realtime|tts|transcribe|image|embedding|moderation|instruct|search|codex|whisper|dall-e|sora/i;
 function fillModels(ids, selected) {
   const sel = $('model');
-  const list = ids.includes(selected) ? ids : [selected, ...ids];
-  sel.replaceChildren(...list.map((id) => new Option(id, id, false, id === selected)));
+  const list = selected === 'auto' || ids.includes(selected) ? ids : [selected, ...ids];
+  const auto = new Option('자동 · 가장 좋은 모델 (' + store.get('ag_best', DEFAULT_MODEL) + ')', 'auto', false, selected === 'auto');
+  sel.replaceChildren(auto, ...list.map((id) => new Option(id, id, false, id === selected)));
+}
+
+// 목록에서 가장 좋은 범용 모델을 고른다: 접미사 없는 gpt-N, gpt-N.M 중 버전이 가장 높은 것
+// (mini·nano는 약하고, pro는 매우 느리고 이 방식으로는 호출이 안 될 수 있어 제외)
+function pickBest(ids) {
+  let best = null, bestVer = [-1, -1];
+  for (const id of ids) {
+    const m = id.match(/^gpt-([0-9]+)(?:[.]([0-9]+))?$/);
+    if (!m) continue;
+    const ver = [Number(m[1]), Number(m[2] || 0)];
+    if (ver[0] > bestVer[0] || (ver[0] === bestVer[0] && ver[1] > bestVer[1])) { best = id; bestVer = ver; }
+  }
+  return best;
+}
+
+async function fetchModelIds(key) {
+  const r = await fetch(API_BASE + '/models', { headers: { authorization: 'Bearer ' + key } });
+  if (!r.ok) throw Object.assign(new Error(String(r.status)), { status: r.status });
+  const ids = ((await r.json()).data || []).map((m) => m.id);
+  const best = pickBest(ids);
+  if (best && key === cfg.key) store.set('ag_best', best);
+  return ids;
 }
 
 async function loadModels() {
   const key = $('key').value.trim();
   const msg = $('modelMsg');
-  const current = $('model').value || cfg.model;
+  const current = $('model').value || cfg.modelChoice;
   if (!key) { msg.textContent = '키를 넣으면 쓸 수 있는 모델 목록을 불러옵니다.'; return; }
   msg.textContent = '모델 목록 불러오는 중…';
   try {
-    const r = await fetch(API_BASE + '/models', { headers: { authorization: 'Bearer ' + key } });
-    if (r.status === 401) { msg.textContent = 'API 키가 올바르지 않아요.'; return; }
-    if (!r.ok) throw new Error(String(r.status));
-    const ids = ((await r.json()).data || [])
-      .map((m) => m.id)
+    const all = await fetchModelIds(key);
+    const best = pickBest(all);
+    const ids = all
       .filter((id) => /^(gpt-|o\d|chatgpt)/.test(id) && !NOT_CHAT.test(id))
       .sort()
       .reverse();
     fillModels(ids, current);
-    msg.textContent = ids.includes(current)
+    if (best) $('model').options[0].textContent = '자동 · 가장 좋은 모델 (' + best + ')';
+    msg.textContent = current === 'auto' || ids.includes(current)
       ? '모델 ' + ids.length + '개를 불러왔어요.'
       : '"' + current + '" 모델은 이 키로 쓸 수 없어요. 목록에서 다른 모델을 고르세요.';
-  } catch {
-    msg.textContent = '모델 목록을 불러오지 못했어요.';
+  } catch (e) {
+    msg.textContent = e.status === 401 ? 'API 키가 올바르지 않아요.' : '모델 목록을 불러오지 못했어요.';
   }
 }
 
@@ -433,8 +464,45 @@ function showAnswer(text) {
   panel.hidden = false;
   navigator.vibrate?.([60, 60, 60]);
   speak(lines.join(', '));
+  addHist(lines);
   return true;
 }
+
+// ---------- 풀이 기록 (오른쪽 위) ----------
+const histEl = $('hist');
+const histList = $('histList');
+let hist = [];
+try { hist = JSON.parse(store.get('ag_hist', '[]')) || []; } catch { hist = []; }
+
+function renderHist() {
+  histEl.hidden = hist.length === 0;
+  histList.replaceChildren(...hist.slice().reverse().map((t) => {
+    const d = document.createElement('div');
+    d.textContent = t;
+    return d;
+  }));
+}
+
+function addHist(lines) {
+  for (const line of lines) {
+    // 같은 문제를 방금 다시 풀었으면 예전 줄을 새 답으로 바꾼다
+    const m = line.match(/^(.+?번)[ ]*:/);
+    const i = m ? hist.findIndex((h, idx) => idx >= hist.length - 5 && h.startsWith(m[1])) : -1;
+    if (i >= 0) hist.splice(i, 1);
+    hist.push(line);
+  }
+  hist = hist.slice(-200);
+  store.set('ag_hist', JSON.stringify(hist));
+  renderHist();
+}
+
+$('histClear').addEventListener('click', () => {
+  if (!confirm('풀이 기록을 모두 지울까요?')) return;
+  hist = [];
+  store.set('ag_hist', '[]');
+  renderHist();
+});
+renderHist();
 
 // 답을 지우고 다음 문제를 기다린다
 function nextProblem() {
@@ -473,7 +541,7 @@ function speak(text) {
 // 답이 떠 있을 때: 이전 답을 지우고 다음 문제를 기다린다 (박스에 문제가 멈춰 있으면 1초 뒤 자동 촬영)
 // 대기 중일 때: 기다리지 않고 바로 찍는다
 document.addEventListener('click', (e) => {
-  if (settings.open || e.target.closest('.top') || e.target.closest('.box-handle')) return;
+  if (settings.open || e.target.closest('.top') || e.target.closest('.box-handle') || e.target.closest('.hist')) return;
   if (!cameraReady || state === 'solving') return;
   if (cfg.voice && window.speechSynthesis) speechSynthesis.resume(); // iOS 음성 잠금 해제
   if (state === 'shown') { nextProblem(); return; }
@@ -484,7 +552,7 @@ document.addEventListener('click', (e) => {
 function openSettings() {
   if (settings.open) return;
   $('key').value = cfg.key;
-  fillModels([], cfg.model);
+  fillModels([], cfg.modelChoice);
   loadModels();
   $('effort').value = cfg.effort;
   $('sens').value = String(cfg.sens);
@@ -498,8 +566,8 @@ $('key').addEventListener('change', loadModels);
 
 $('settingsForm').addEventListener('submit', () => {
   store.set('ag_key', $('key').value.trim());
-  store.set('ag_model', $('model').value);
-  store.set('ag_effort3', $('effort').value);
+  store.set('ag_model2', $('model').value);
+  store.set('ag_effort4', $('effort').value);
   store.set('ag_sens', $('sens').value);
   store.set('ag_voice', $('voice').checked ? '1' : '0');
 });
@@ -526,3 +594,4 @@ $('copyLink').addEventListener('click', async () => {
 // ---------- 시작 ----------
 setInterval(tick, TICK_MS);
 startCamera().then(() => { if (!cfg.key) openSettings(); });
+if (cfg.key) fetchModelIds(cfg.key).catch(() => {}); // 가장 좋은 모델 이름을 최신으로
