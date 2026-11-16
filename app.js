@@ -65,6 +65,7 @@ const gauge = $('gauge');
 const gaugeFg = $('gaugeFg');
 const panel = $('panel');
 const answerEl = $('answer');
+const shotEl = $('shot');
 const settings = $('settings');
 const GAUGE_LEN = 276.46;
 
@@ -107,8 +108,10 @@ async function startCamera() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } },
     });
+    // 가까이 댄 글자에 계속 초점을 맞추도록 요청 (지원하는 폰만)
+    stream.getVideoTracks()[0]?.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
     video.srcObject = stream;
     await video.play().catch(() => {});
     cameraReady = true;
@@ -236,28 +239,59 @@ function tick() {
 }
 
 // ---------- 촬영과 풀이 ----------
-function grabJpegBase64() {
+const sharpCanvas = document.createElement('canvas');
+sharpCanvas.width = 256; sharpCanvas.height = 192;
+const sharpCtx = sharpCanvas.getContext('2d', { willReadFrequently: true });
+
+// 지금 프레임의 박스 영역이 얼마나 또렷한지 (이웃 픽셀 밝기 차이의 합, 클수록 또렷)
+function sharpness(r) {
+  sharpCtx.drawImage(video, r.x, r.y, r.w, r.h, 0, 0, 256, 192);
+  const d = sharpCtx.getImageData(0, 0, 256, 192).data;
+  let s = 0;
+  for (let i = 4; i < d.length; i += 4) s += Math.abs(d[i + 1] - d[i - 3]);
+  return s;
+}
+
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+// 탭할 때 폰이 흔들리므로 잠깐 기다린 뒤, 연속 프레임 중 가장 또렷한 것을 고른다
+async function grabJpegBase64() {
   const r = boxSourceRect();
   const scale = Math.min(1, MAX_SIDE / Math.max(r.w, r.h));
   big.width = Math.round(r.w * scale);
   big.height = Math.round(r.h * scale);
-  big.getContext('2d').drawImage(video, r.x, r.y, r.w, r.h, 0, 0, big.width, big.height);
-  return big.toDataURL('image/jpeg', 0.9).split(',')[1];
+  const ctx = big.getContext('2d');
+  await sleep(250);
+  let best = -1;
+  for (let i = 0; i < 5; i++) {
+    if (i) await sleep(70);
+    const s = sharpness(r);
+    if (s > best) {
+      best = s;
+      ctx.drawImage(video, r.x, r.y, r.w, r.h, 0, 0, big.width, big.height);
+    }
+  }
+  return big.toDataURL('image/jpeg', 0.9);
 }
 
 async function capture() {
   if (state === 'solving') return;
   if (!cfg.key) { openSettings(); return; }
+  if (!video.videoWidth) return; // 카메라 영상이 아직 없음
 
   state = 'solving';
   stillMs = 0;
-  const image = grabJpegBase64();
-  refGray = video.videoWidth ? readGray() : null;
-  changedMs = 0;
-
   panel.hidden = true;
   setGauge(0);
   setBox('busy');
+  setStatus('찍는 중… 움직이지 마세요', 'busy');
+  $('busySec').textContent = '';
+
+  const dataUrl = await grabJpegBase64();
+  const image = dataUrl.split(',')[1];
+  shotEl.src = dataUrl; // 무엇이 찍혔는지 답 아래에 보여준다
+  refGray = video.videoWidth ? readGray() : null;
+  changedMs = 0;
   navigator.vibrate?.(40);
 
   const started = Date.now();
@@ -450,6 +484,7 @@ function showAnswer(text) {
 
   answerEl.textContent = lines.join('\n');
   answerEl.className = 'answer ' + size;
+  shotEl.hidden = false;
   panel.hidden = false;
   navigator.vibrate?.([60, 60, 60]);
   speak(lines.join(', '));
@@ -507,12 +542,14 @@ function nextProblem() {
 function showGuide() {
   answerEl.textContent = '문제를 박스에 맞춘 뒤\n화면을 탭하세요.';
   answerEl.className = 'answer guide';
+  shotEl.hidden = true;
   panel.hidden = false;
 }
 
 function showMessage(text) {
   answerEl.textContent = text;
   answerEl.className = 'answer msg';
+  shotEl.hidden = !shotEl.getAttribute('src');
   panel.hidden = false;
 }
 
