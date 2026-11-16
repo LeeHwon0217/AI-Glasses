@@ -3,6 +3,20 @@
 const DEFAULT_MODEL = 'gpt-5';
 const API_BASE = 'https://api.openai.com/v1';
 
+// Claude(Anthropic) 키는 sk-ant- 로 시작한다. 그 외는 OpenAI 키로 본다.
+const CLAUDE_BASE = 'https://api.anthropic.com/v1';
+const CLAUDE_MODEL = 'claude-opus-5-5';
+const isClaudeKey = (key) => key.startsWith('sk-ant-');
+const claudeHeaders = (key) => ({
+  'content-type': 'application/json',
+  'x-api-key': key,
+  'anthropic-version': '2026-10-21',
+  'anthropic-dangerous-direct-browser-access': 'true', // 브라우저에서 직접 호출하려면 필요
+});
+function autoModel(key) {
+  return isClaudeKey(key) ? CLAUDE_MODEL : store.get('ag_best', DEFAULT_MODEL);
+}
+
 // ---------- 설정 저장 ----------
 const store = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
@@ -25,9 +39,12 @@ const cfg = {
   get modelChoice() { return store.get('ag_model2', 'auto'); },
   get model() {
     const m = this.modelChoice;
-    return m === 'auto' ? store.get('ag_best', DEFAULT_MODEL) : m;
+    const claude = isClaudeKey(this.key);
+    // 고른 모델이 지금 키의 회사 것이 아니면 자동으로 돌아간다
+    if (m === 'auto' || claude !== m.startsWith('claude')) return autoModel(this.key);
+    return m;
   },
-  get effort() { return store.get('ag_effort4', 'medium'); },
+  get effort() { return store.get('ag_effort5', 'low'); },
   get sens() { return Number(store.get('ag_sens', '3')); },
   get voice() { return store.get('ag_voice', '0') === '1'; },
 };
@@ -55,6 +72,59 @@ const SYSTEM_PROMPT = `너는 휴대폰 카메라로 찍은 객관식 문제를 
 - 선택지가 A, B, C 같은 글자면 정답 자리에 그 글자를 쓴다. 선택지가 없는 주관식·단답형이면 정답 자리에 답만 짧게 쓴다.
 - 사진이 흐리거나 잘려서 문제를 읽을 수 없거나 문제가 아예 없으면 NONE 이라고만 출력한다.
 - 문제 내용, 풀이, 설명, 인사말, 마크다운은 출력하지 않는다. 신중하게 풀되 출력은 정답뿐이다.`;
+
+const MATERIAL_INTRO = `
+
+아래는 이 시험 과목의 교안 전문이다. 시험 문제는 이 교안에서 출제된다. 교안에서 문제와 관련된 부분을 찾아 그것을 최우선 근거로 정답을 고른다. 교안의 표현·분류·용어가 일반적인 지식과 다르면 교안을 따른다. 교안에 관련 내용이 없을 때만 일반 지식으로 푼다. 교안은 슬라이드에서 뽑은 글이라 띄어쓰기가 빠진 곳이 있다.
+
+===== 교안 =====
+`;
+
+// ---------- 교안 (이 폰에만 저장) ----------
+const MAT_STORE = 'mat';
+function openDb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('ag', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(MAT_STORE);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function matRun(mode, fn) {
+  const d = await openDb();
+  return new Promise((res, rej) => {
+    const tx = d.transaction(MAT_STORE, mode);
+    const out = fn(tx.objectStore(MAT_STORE));
+    tx.oncomplete = () => res(out && out.result);
+    tx.onerror = () => rej(tx.error);
+  });
+}
+const matNames = () => matRun('readonly', (s) => s.getAllKeys());
+const matGet = (name) => matRun('readonly', (s) => s.get(name));
+const matReplace = (subjects) => matRun('readwrite', (s) => {
+  s.clear();
+  for (const x of subjects) s.put(String(x.text), String(x.name));
+});
+
+let subjectText = ''; // 지금 고른 과목의 교안 전문
+
+async function loadSubject() {
+  const name = store.get('ag_subject', '');
+  try { subjectText = name ? (await matGet(name)) || '' : ''; } catch { subjectText = ''; }
+}
+
+// 화면 위 과목 선택 상자를 채운다
+async function fillSubjects() {
+  const sel = document.getElementById('subject');
+  let names = [];
+  try { names = await matNames(); } catch { /* 저장소를 못 쓰는 환경 */ }
+  const current = store.get('ag_subject', '');
+  sel.replaceChildren(new Option(names.length ? '교안 없이' : '교안 없음', ''), ...names.map((n) => new Option(n, n, false, n === current)));
+  sel.hidden = names.length === 0;
+  if (current && !names.includes(current)) store.set('ag_subject', '');
+  await loadSubject();
+  return names;
+}
 
 // ---------- 화면 요소 ----------
 const $ = (id) => document.getElementById(id);
@@ -326,12 +396,66 @@ function fail(userMessage, extra = {}) {
   return Object.assign(new Error(userMessage), { userMessage }, extra);
 }
 
+// Claude로 풀기. 교안은 캐시 표시를 해서 같은 과목을 연달아 풀 때 빠르고 싸게 읽힌다.
+async function solveClaude(imageBase64) {
+  const model = cfg.model;
+  const system = [{ type: 'text', text: SYSTEM_PROMPT }];
+  if (subjectText) {
+    system.push({ type: 'text', text: MATERIAL_INTRO + subjectText, cache_control: { type: 'ephemeral', ttl: '1h' } });
+  }
+  const body = {
+    model,
+    max_tokens: 16000,
+    output_config: { effort: cfg.effort === 'fast' ? 'low' : cfg.effort },
+    system,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 } },
+        { type: 'text', text: '이 사진 가운데에 있는 문제 하나만 풀고 정답만 출력해.' },
+      ],
+    }],
+  };
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  let r, data = null;
+  try {
+    r = await fetch(CLAUDE_BASE + '/messages', {
+      method: 'POST', headers: claudeHeaders(cfg.key), body: JSON.stringify(body), signal: ctrl.signal,
+    });
+    try { data = await r.json(); } catch { /* 본문 없음 */ }
+  } catch (e) {
+    if (e.name === 'AbortError') throw fail('시간이 너무 오래 걸려요. 탭해서 다시 시도하세요.');
+    throw fail('인터넷 연결을 확인해 주세요.');
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!r.ok) {
+    const m = data?.error?.message || '';
+    if (r.status === 401) throw fail('API 키가 올바르지 않아요.', { needsKey: true });
+    if (r.status === 404) throw fail('이 키로는 "' + model + '" 모델을 쓸 수 없어요.\n설정에서 다른 모델을 고르세요.', { needsKey: true });
+    if (/credit balance/i.test(m)) throw fail('Claude API 크레딧이 없어요. 결제 설정을 확인하세요.');
+    if (r.status === 413 || /too long|too large/i.test(m)) throw fail('교안이 너무 커서 보낼 수 없어요.\n' + m);
+    if (r.status === 429) throw fail('요청이 너무 많아요. 잠시 뒤 다시 시도하세요.\n' + m);
+    if (r.status >= 500) throw fail('AI 서버가 바빠요. 잠시 뒤 다시 시도하세요.');
+    throw fail('요청 오류 (' + r.status + ')' + (m ? '\n' + m : ''));
+  }
+  if (data?.stop_reason === 'refusal') throw fail('이 문제는 풀 수 없어요.');
+  const text = (data?.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
+  if (!text) throw fail('답을 받지 못했어요. 탭해서 다시 시도하세요.');
+  return text;
+}
+
 async function solve(imageBase64) {
+  if (isClaudeKey(cfg.key)) return solveClaude(imageBase64);
   const model = cfg.model;
   const body = {
     model,
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      // 교안을 맨 앞에 두면 같은 과목을 연달아 풀 때 OpenAI가 앞부분을 캐시해서 더 빠르고 싸다
+      { role: 'system', content: SYSTEM_PROMPT + (subjectText ? MATERIAL_INTRO + subjectText : '') },
       {
         role: 'user',
         content: [
@@ -366,6 +490,9 @@ async function solve(imageBase64) {
       throw fail('이 키로는 "' + model + '" 모델을 쓸 수 없어요.\n설정에서 다른 모델을 고르세요.', { needsKey: true });
     }
     if (err.code === 'insufficient_quota') throw fail('OpenAI 크레딧이 없어요. 결제 설정을 확인하세요.');
+    if ((res.status === 429 || res.status === 400) && /too large|maximum context|tokens/i.test(err.message || '')) {
+      throw fail('교안이 너무 커서 이 모델·계정으로는 보낼 수 없어요.\n' + (err.message || ''));
+    }
     if (res.status === 429) throw fail('요청이 너무 많아요. 잠시 뒤 다시 시도하세요.');
     if (res.status >= 500) throw fail('AI 서버가 바빠요. 잠시 뒤 다시 시도하세요.');
     throw fail('요청 오류 (' + res.status + ')' + (err.message ? '\n' + err.message : ''));
@@ -416,7 +543,7 @@ const NOT_CHAT = /audio|realtime|tts|transcribe|image|embedding|moderation|instr
 function fillModels(ids, selected) {
   const sel = $('model');
   const list = selected === 'auto' || ids.includes(selected) ? ids : [selected, ...ids];
-  const auto = new Option('자동 · 가장 좋은 모델 (' + store.get('ag_best', DEFAULT_MODEL) + ')', 'auto', false, selected === 'auto');
+  const auto = new Option('자동 · 가장 좋은 모델 (' + autoModel(cfg.key) + ')', 'auto', false, selected === 'auto');
   sel.replaceChildren(auto, ...list.map((id) => new Option(id, id, false, id === selected)));
 }
 
@@ -434,6 +561,11 @@ function pickBest(ids) {
 }
 
 async function fetchModelIds(key) {
+  if (isClaudeKey(key)) {
+    const rc = await fetch(CLAUDE_BASE + '/models?limit=100', { headers: claudeHeaders(key) });
+    if (!rc.ok) throw Object.assign(new Error(String(rc.status)), { status: rc.status });
+    return ((await rc.json()).data || []).map((m) => m.id);
+  }
   const r = await fetch(API_BASE + '/models', { headers: { authorization: 'Bearer ' + key } });
   if (!r.ok) throw Object.assign(new Error(String(r.status)), { status: r.status });
   const ids = ((await r.json()).data || []).map((m) => m.id);
@@ -445,14 +577,16 @@ async function fetchModelIds(key) {
 async function loadModels() {
   const key = $('key').value.trim();
   const msg = $('modelMsg');
-  const current = $('model').value || cfg.modelChoice;
+  let current = $('model').value || cfg.modelChoice;
+  if (current !== 'auto' && isClaudeKey(key) !== current.startsWith('claude')) current = 'auto'; // 다른 회사 모델이 골라져 있으면 자동으로
   if (!key) { msg.textContent = '키를 넣으면 쓸 수 있는 모델 목록을 불러옵니다.'; return; }
   msg.textContent = '모델 목록 불러오는 중…';
   try {
     const all = await fetchModelIds(key);
-    const best = pickBest(all);
+    const claude = isClaudeKey(key);
+    const best = claude ? CLAUDE_MODEL : pickBest(all);
     const ids = all
-      .filter((id) => /^(gpt-|o\d|chatgpt)/.test(id) && !NOT_CHAT.test(id))
+      .filter((id) => claude ? id.startsWith('claude') : /^(gpt-|o\d|chatgpt)/.test(id) && !NOT_CHAT.test(id))
       .sort()
       .reverse();
     fillModels(ids, current);
@@ -582,16 +716,46 @@ function openSettings() {
   $('effort').value = cfg.effort;
   $('voice').checked = cfg.voice;
   $('settingsMsg').textContent = '';
+  showMatStatus();
   settings.showModal();
 }
 
 $('openSettings').addEventListener('click', openSettings);
+
+$('subject').addEventListener('change', (e) => {
+  store.set('ag_subject', e.target.value);
+  loadSubject();
+});
+
+// 교안.json 파일을 골라 이 폰에 저장한다
+$('matFile').addEventListener('change', async (e) => {
+  const msg = $('matMsg');
+  const file = e.target.files[0];
+  if (!file) return;
+  msg.textContent = '불러오는 중…';
+  try {
+    const subjects = (JSON.parse(await file.text()).subjects || []).filter((x) => x && x.name && x.text);
+    if (!subjects.length) throw new Error('empty');
+    await matReplace(subjects);
+    const names = await fillSubjects();
+    msg.textContent = '과목 ' + names.length + '개를 저장했어요. 화면 위에서 과목을 고르세요.';
+  } catch {
+    msg.textContent = '교안 파일을 읽지 못했어요. 교안.json 파일이 맞는지 확인하세요.';
+  }
+  e.target.value = '';
+});
+
+async function showMatStatus() {
+  let names = [];
+  try { names = await matNames(); } catch { /* 무시 */ }
+  $('matMsg').textContent = names.length ? '저장된 과목 ' + names.length + '개: ' + names.join(', ') : '아직 불러온 교안이 없어요.';
+}
 $('key').addEventListener('change', loadModels);
 
 $('settingsForm').addEventListener('submit', () => {
   store.set('ag_key', $('key').value.trim());
   store.set('ag_model2', $('model').value);
-  store.set('ag_effort4', $('effort').value);
+  store.set('ag_effort5', $('effort').value);
   store.set('ag_voice', $('voice').checked ? '1' : '0');
 });
 
@@ -616,5 +780,6 @@ $('copyLink').addEventListener('click', async () => {
 
 // ---------- 시작 ----------
 setInterval(tick, TICK_MS);
+fillSubjects();
 startCamera().then(() => { if (!cfg.key) openSettings(); });
 if (cfg.key) fetchModelIds(cfg.key).catch(() => {}); // 가장 좋은 모델 이름을 최신으로

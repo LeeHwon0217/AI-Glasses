@@ -15,6 +15,7 @@
 
 <header class="top">
   <div id="status" class="status">카메라 켜는 중…</div>
+  <select id="subject" class="subject" aria-label="과목" hidden></select>
   <button id="openSettings" class="icon-btn" aria-label="설정">⚙</button>
 </header>
 
@@ -46,8 +47,8 @@
   <form method="dialog" id="settingsForm">
     <h2>설정</h2>
 
-    <label for="key">OpenAI API 키</label>
-    <input id="key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-…">
+    <label for="key">API 키 (Claude 또는 OpenAI)</label>
+    <input id="key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-ant-… 또는 sk-…">
     <p class="hint">이 폰 브라우저에만 저장됩니다.</p>
 
     <label for="model">모델</label>
@@ -57,10 +58,14 @@
     <label for="effort">풀이 깊이</label>
     <select id="effort">
       <option value="fast">가장 빠르게 (부정확)</option>
-      <option value="low">빠르게</option>
-      <option value="medium">보통 (추천)</option>
+      <option value="low">빠르게 (추천)</option>
+      <option value="medium">보통</option>
       <option value="high">꼼꼼하게</option>
     </select>
+
+    <label for="matFile">교안 파일 (교안.json)</label>
+    <input id="matFile" type="file" accept=".json,application/json">
+    <p id="matMsg" class="hint"></p>
 
     <label class="row"><input id="voice" type="checkbox"> 답을 음성으로 읽어주기</label>
 

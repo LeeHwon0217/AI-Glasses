@@ -46,6 +46,22 @@ html, body {
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
+.status { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subject {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 34vw;
+  margin-left: auto;
+  padding: 8px 6px;
+  border: 0;
+  border-radius: 999px;
+  background: #4ade80;
+  color: #052e12;
+  font-size: 14px;
+  font-weight: 700;
+}
+.subject[hidden] { display: none; }
+.settings input[type=file] { width: 100%; font-size: 14px; color: #c9c9d1; }
 .status.busy { background: rgba(20, 90, 200, .85); }
 .status.err { background: rgba(190, 40, 40, .9); }
 
