@@ -150,9 +150,9 @@ async function syncMaterials() {
     const subjects = (JSON.parse(json).subjects || []).filter((x) => x && x.name && x.text);
     await matReplace(subjects);
     store.set('ag_matver', ver);
-    const names = await fillSubjects();
+    await fillSubjects();
     matSyncNote = '';
-    if (state === 'watch') setStatus('교안 ' + names.length + '과목 받았어요 · 과목을 고르세요');
+    askSubject();
   } catch {
     matSyncNote = '교안을 받지 못했어요. 설정 링크를 다시 열어 보세요.';
     if (state === 'watch') setStatus('교안을 받지 못했어요', 'err');
@@ -170,6 +170,7 @@ const panel = $('panel');
 const answerEl = $('answer');
 const shotEl = $('shot');
 const settings = $('settings');
+const pick = $('pick');
 const GAUGE_LEN = 276.46;
 
 const small = document.createElement('canvas');
@@ -322,7 +323,7 @@ function contrast(g) {
 }
 
 function tick() {
-  if (!cameraReady || state === 'solving' || dragging || settings.open || document.hidden) return;
+  if (!cameraReady || state === 'solving' || dragging || settings.open || pick.open || document.hidden) return;
   if (video.readyState < 2 || !video.videoWidth) return;
 
   const gray = readGray();
@@ -730,11 +731,42 @@ function speak(text) {
   speechSynthesis.speak(u);
 }
 
+// ---------- 시작할 때 과목 고르기 ----------
+// 교안이 있으면 열 때마다 시험 과목부터 고르게 한다 (지난번 과목은 초록색으로 표시)
+let pickedThisVisit = false;
+async function askSubject() {
+  if (pickedThisVisit || settings.open || pick.open) return;
+  let names = [];
+  try { names = await matNames(); } catch { /* 무시 */ }
+  if (!names.length) return;
+  const last = store.get('ag_subject', '');
+  const button = (label, value) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    if (value && value === last) b.className = 'last';
+    b.addEventListener('click', () => {
+      store.set('ag_subject', value);
+      $('subject').value = value;
+      loadSubject();
+      pick.close();
+    });
+    return b;
+  };
+  $('pickList').replaceChildren(...names.map((n) => button(n, n)), button('교안 없이 풀기', ''));
+  pick.showModal();
+}
+pick.addEventListener('close', () => {
+  pickedThisVisit = true;
+  prevGray = null;
+  if (cameraReady && state === 'watch') idleStatus();
+});
+
 // ---------- 화면 탭 ----------
 // 탭하면 박스 안을 찍어서 푼다. 답이 떠 있을 때 탭해도 곧바로 다음 문제를 찍는다.
 // 대기 중일 때: 기다리지 않고 바로 찍는다
 document.addEventListener('click', (e) => {
-  if (settings.open || e.target.closest('.top') || e.target.closest('.box-handle') || e.target.closest('.hist')) return;
+  if (settings.open || pick.open || e.target.closest('.top') || e.target.closest('.box-handle') || e.target.closest('.hist')) return;
   if (!cameraReady || state === 'solving') return;
   if (cfg.voice && window.speechSynthesis) speechSynthesis.resume(); // iOS 음성 잠금 해제
   capture();
@@ -796,6 +828,7 @@ settings.addEventListener('close', () => {
   stillMs = 0;
   prevGray = null;
   if (cameraReady && state === 'watch') idleStatus();
+  askSubject();
 });
 
 $('copyLink').addEventListener('click', async () => {
@@ -814,6 +847,6 @@ $('copyLink').addEventListener('click', async () => {
 
 // ---------- 시작 ----------
 setInterval(tick, TICK_MS);
-fillSubjects().then(syncMaterials);
+fillSubjects().then(syncMaterials).then(askSubject);
 startCamera().then(() => { if (!cfg.key) openSettings(); });
 if (cfg.key) fetchModelIds(cfg.key).catch(() => {}); // 가장 좋은 모델 이름을 최신으로

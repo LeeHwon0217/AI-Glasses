@@ -264,6 +264,19 @@ html, body {
 }
 .settings input[type=range] { width: 100%; }
 .settings input[type=checkbox] { width: 22px; height: 22px; }
+.pick-list button {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 15px;
+  border: 0;
+  border-radius: 12px;
+  background: #2c2c34;
+  color: #fff;
+  font-size: 19px;
+  font-weight: 700;
+}
+.pick-list button.last { background: #4ade80; color: #052e12; }
 .hint { margin: 6px 0 0; font-size: 13px; color: #9a9aa5; min-height: 1em; }
 .buttons { display: flex; gap: 10px; margin-top: 20px; }
 .buttons button {
