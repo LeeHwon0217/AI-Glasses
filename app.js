@@ -793,6 +793,7 @@ pick.addEventListener('close', () => {
 // 대기 중일 때: 기다리지 않고 바로 찍는다
 document.addEventListener('click', (e) => {
   if (e.target === shotEl) { shotEl.classList.toggle('big'); return; } // 찍힌 사진 크게/작게
+  if (e.target.closest('dialog')) return; // 과목 고르기·설정 화면 안의 탭은 촬영이 아니다
   if (settings.open || pick.open || e.target.closest('.top') || e.target.closest('.box-handle') || e.target.closest('.hist')) return;
   if (!cameraReady || state === 'solving') return;
   if (cfg.voice && window.speechSynthesis) speechSynthesis.resume(); // iOS 음성 잠금 해제
