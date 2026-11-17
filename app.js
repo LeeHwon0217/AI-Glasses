@@ -48,7 +48,7 @@ const cfg = {
     if (m === 'auto' || claude !== m.startsWith('claude')) return autoModel(this.key);
     return m;
   },
-  get effort() { return store.get('ag_effort5', 'low'); },
+  get effort() { return store.get('ag_effort6', 'medium'); },
   get sens() { return Number(store.get('ag_sens', '3')); },
   get voice() { return store.get('ag_voice', '0') === '1'; },
 };
@@ -802,7 +802,7 @@ $('key').addEventListener('change', loadModels);
 $('settingsForm').addEventListener('submit', () => {
   store.set('ag_key', $('key').value.trim());
   store.set('ag_model2', $('model').value);
-  store.set('ag_effort5', $('effort').value);
+  store.set('ag_effort6', $('effort').value);
   store.set('ag_voice', $('voice').checked ? '1' : '0');
 });
 
