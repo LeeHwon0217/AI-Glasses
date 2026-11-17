@@ -14,7 +14,8 @@ const claudeHeaders = (key) => ({
   'anthropic-dangerous-direct-browser-access': 'true', // 브라우저에서 직접 호출하려면 필요
 });
 function autoModel(key) {
-  return isClaudeKey(key) ? CLAUDE_MODEL : store.get('ag_best', DEFAULT_MODEL);
+  // 키를 아직 안 넣었을 때도 기본은 Claude Opus로 보여준다
+  return !key || isClaudeKey(key) ? CLAUDE_MODEL : store.get('ag_best', DEFAULT_MODEL);
 }
 
 // ---------- 설정 저장 ----------
@@ -577,7 +578,7 @@ const NOT_CHAT = /audio|realtime|tts|transcribe|image|embedding|moderation|instr
 function fillModels(ids, selected) {
   const sel = $('model');
   const list = selected === 'auto' || ids.includes(selected) ? ids : [selected, ...ids];
-  const auto = new Option('자동 · 가장 좋은 모델 (' + autoModel(cfg.key) + ')', 'auto', false, selected === 'auto');
+  const auto = new Option('자동 · 가장 좋은 모델 (' + autoModel($('key').value.trim()) + ')', 'auto', false, selected === 'auto');
   sel.replaceChildren(auto, ...list.map((id) => new Option(id, id, false, id === selected)));
 }
 
