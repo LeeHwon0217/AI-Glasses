@@ -262,7 +262,7 @@ const BOX_MIN_H = 90;
 let dragging = false;
 
 function boxMaxH() {
-  return window.innerHeight - boxEl.getBoundingClientRect().top - 120; // 정답 자리 확보
+  return window.innerHeight - boxEl.getBoundingClientRect().top - 104; // 맨 아래 답안 띠 자리
 }
 
 function setBoxHeight(h) {
@@ -272,8 +272,8 @@ function setBoxHeight(h) {
 }
 
 function restoreBoxHeight() {
-  const saved = Number(store.get('ag_box_h', '0'));
-  setBoxHeight(saved || window.innerWidth * 0.6);
+  const saved = Number(store.get('ag_box_h2', '0'));
+  setBoxHeight(saved || boxMaxH()); // 기본은 세로로 긴 문제에 맞춰 최대 높이
 }
 restoreBoxHeight();
 window.addEventListener('resize', restoreBoxHeight);
@@ -289,7 +289,7 @@ handle.addEventListener('pointermove', (e) => {
 const endDrag = () => {
   if (!dragging) return;
   dragging = false;
-  store.set('ag_box_h', String(boxEl.getBoundingClientRect().height));
+  store.set('ag_box_h2', String(boxEl.getBoundingClientRect().height));
   stillMs = 0;
   prevGray = null;
 };
@@ -394,7 +394,8 @@ async function capture() {
 
   const dataUrl = await grabJpegBase64();
   const image = dataUrl.split(',')[1];
-  shotEl.src = dataUrl; // 무엇이 찍혔는지 답 아래에 보여준다
+  shotEl.classList.remove('big');
+  shotEl.src = dataUrl; // 무엇이 찍혔는지 답 옆에 작게 보여준다 (누르면 크게)
   refGray = video.videoWidth ? readGray() : null;
   changedMs = 0;
   navigator.vibrate?.(40);
@@ -635,6 +636,31 @@ async function loadModels() {
 }
 
 // ---------- 답 표시 ----------
+// "12번: 3" 꼴의 한 줄 답은 OMR 답안지처럼 번호 칸을 칠해서 보여준다
+function renderAnswer(lines, size) {
+  const m = lines.length === 1 && lines[0].match(/^(.+?)[ ]*:[ ]*([1-9])$/);
+  if (!m) {
+    answerEl.textContent = lines.join('\n');
+    answerEl.className = 'answer ' + size;
+    return;
+  }
+  const picked = Number(m[2]);
+  const row = document.createElement('div');
+  row.className = 'omr';
+  const num = document.createElement('span');
+  num.className = 'omr-num';
+  num.textContent = m[1];
+  row.append(num);
+  for (let i = 1; i <= Math.max(5, picked); i++) {
+    const b = document.createElement('span');
+    b.className = 'omr-b' + (i === picked ? ' on' : '');
+    b.textContent = String(i);
+    row.append(b);
+  }
+  answerEl.replaceChildren(row);
+  answerEl.className = 'answer';
+}
+
 // 정답을 화면에 띄운다. 문제를 못 읽은 경우 false를 돌려준다.
 function showAnswer(text) {
   const answer = text.trim();
@@ -651,8 +677,7 @@ function showAnswer(text) {
   else if (lines.length <= 4 && longest <= 9) size = 'lg';
   else if (lines.length <= 7 && longest <= 14) size = 'md';
 
-  answerEl.textContent = lines.join('\n');
-  answerEl.className = 'answer ' + size;
+  renderAnswer(lines, size);
   shotEl.hidden = false;
   panel.hidden = false;
   navigator.vibrate?.([60, 60, 60]);
@@ -671,7 +696,7 @@ function renderHist() {
   histEl.hidden = hist.length === 0;
   histList.replaceChildren(...hist.slice().reverse().map((t) => {
     const d = document.createElement('div');
-    d.textContent = t;
+    d.textContent = t.replace(/^(.+?)[ ]*:[ ]*([1-9])$/, (all, n, a) => n + ' ' + '①②③④⑤⑥⑦⑧⑨'[a - 1]);
     return d;
   }));
 }
@@ -709,7 +734,7 @@ function nextProblem() {
 }
 
 function showGuide() {
-  answerEl.textContent = '문제를 박스에 맞춘 뒤\n화면을 탭하세요.';
+  answerEl.textContent = '문제를 박스에 맞추고 화면을 탭하세요';
   answerEl.className = 'answer guide';
   shotEl.hidden = true;
   panel.hidden = false;
@@ -767,6 +792,7 @@ pick.addEventListener('close', () => {
 // 탭하면 박스 안을 찍어서 푼다. 답이 떠 있을 때 탭해도 곧바로 다음 문제를 찍는다.
 // 대기 중일 때: 기다리지 않고 바로 찍는다
 document.addEventListener('click', (e) => {
+  if (e.target === shotEl) { shotEl.classList.toggle('big'); return; } // 찍힌 사진 크게/작게
   if (settings.open || pick.open || e.target.closest('.top') || e.target.closest('.box-handle') || e.target.closest('.hist')) return;
   if (!cameraReady || state === 'solving') return;
   if (cfg.voice && window.speechSynthesis) speechSynthesis.resume(); // iOS 음성 잠금 해제
