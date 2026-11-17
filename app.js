@@ -792,28 +792,10 @@ $('subject').addEventListener('change', (e) => {
   loadSubject();
 });
 
-// 교안.json 파일을 골라 이 폰에 저장한다
-$('matFile').addEventListener('change', async (e) => {
-  const msg = $('matMsg');
-  const file = e.target.files[0];
-  if (!file) return;
-  msg.textContent = '불러오는 중…';
-  try {
-    const subjects = (JSON.parse(await file.text()).subjects || []).filter((x) => x && x.name && x.text);
-    if (!subjects.length) throw new Error('empty');
-    await matReplace(subjects);
-    const names = await fillSubjects();
-    msg.textContent = '과목 ' + names.length + '개를 저장했어요. 화면 위에서 과목을 고르세요.';
-  } catch {
-    msg.textContent = '교안 파일을 읽지 못했어요. 교안.json 파일이 맞는지 확인하세요.';
-  }
-  e.target.value = '';
-});
-
 async function showMatStatus() {
   let names = [];
   try { names = await matNames(); } catch { /* 무시 */ }
-  $('matMsg').textContent = matSyncNote ? matSyncNote : names.length ? '저장된 과목 ' + names.length + '개: ' + names.join(', ') : '아직 불러온 교안이 없어요.';
+  $('matMsg').textContent = matSyncNote ? matSyncNote : names.length ? '받아 둔 과목 ' + names.length + '개: ' + names.join(', ') : '받아 둔 교안이 없어요. 교안 설정 링크를 한 번 열면 받아집니다.';
 }
 $('key').addEventListener('change', loadModels);
 
