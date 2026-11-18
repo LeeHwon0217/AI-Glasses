@@ -63,17 +63,21 @@ const MIN_CONTRAST = 8;         // 이보다 밋밋한 화면(렌즈 가림, 빈
 const MAX_SIDE = 1568;          // 전송 이미지 긴 변
 const REQUEST_TIMEOUT_MS = 120000;
 const CHANGE_THR = 12;         // 답을 보는 중 화면이 찍은 장면과 이만큼 달라지면 다른 문제로 본다
+// "12번: O" 꼴의 OX 답 (모델이 ○, × 같은 기호로 써도 받아 준다)
+const OX_RE = /^(.+?)[ ]*:[ ]*([OXox○×✕])$/;
+const isO = (c) => 'Oo○'.includes(c);
 const CHANGE_MS = 300;          // 그 상태가 이만큼 이어지면 답을 지운다
 // 풀이 깊이 설정 → 보내 볼 reasoning_effort 값 (앞에서부터 시도)
 const EFFORT_TRIES = { fast: ['minimal', 'none', 'low'], low: ['low'], medium: ['medium'], high: ['high'] };
 
-const SYSTEM_PROMPT = `너는 휴대폰 카메라로 찍은 객관식 문제를 푸는 도우미다. 네 출력은 가공 없이 화면에 아주 큰 글씨로 그대로 표시되고, 사용자는 풀이 없이 정답 번호만 한눈에 보고 싶어 한다.
+const SYSTEM_PROMPT = `너는 휴대폰 카메라로 찍은 시험 문제(객관식, OX, 단답형)를 푸는 도우미다. 네 출력은 가공 없이 화면에 아주 큰 글씨로 그대로 표시되고, 사용자는 풀이 없이 정답 번호만 한눈에 보고 싶어 한다.
 
 출력 규칙:
 - 문제마다 한 줄씩 "문제번호번: 정답" 형식으로 출력한다. 정답은 선택지 번호를 숫자로만 쓴다(①②③이든 1) 2) 3)이든 숫자). 예를 들어 12번 문제의 정답이 ③이면:
 12번: 3
 - 사진은 사용자가 풀고 싶은 문제 하나에 박스를 맞춰 찍은 것이다. 위아래나 옆에 다른 문제가 일부 또는 전부 함께 찍혀 있어도, 사진 한가운데에 가장 가깝고 온전히 보이는 문제 하나만 푼다. 나머지 문제는 무시하고 언급하지 않는다. 출력은 반드시 한 줄이다.
 - 문제 번호가 사진에 보이지 않으면 "정답: 3" 형식으로 출력한다.
+- 옳으면 O, 틀리면 X로 답하는 OX(참·거짓) 문제면 정답 자리에 대문자 O 또는 X 한 글자만 쓴다. 예: "12번: O". "맞음", "옳다" 같은 말로 쓰지 않는다.
 - 선택지가 A, B, C 같은 글자면 정답 자리에 그 글자를 쓴다. 선택지가 없는 주관식·단답형이면 정답 자리에 답만 짧게 쓴다.
 - 사진이 흐리거나 잘려서 문제를 읽을 수 없거나 문제가 아예 없으면 NONE 이라고만 출력한다.
 - 문제 내용, 풀이, 설명, 인사말, 마크다운은 출력하지 않는다. 신중하게 풀되 출력은 정답뿐이다.`;
@@ -638,6 +642,24 @@ async function loadModels() {
 // ---------- 답 표시 ----------
 // "12번: 3" 꼴의 한 줄 답은 OMR 답안지처럼 번호 칸을 칠해서 보여준다
 function renderAnswer(lines, size) {
+  const ox = lines.length === 1 && lines[0].match(OX_RE);
+  if (ox) { // OX 문제: ○ ✕ 두 칸 중 답을 칠한다
+    const row = document.createElement('div');
+    row.className = 'omr';
+    const num = document.createElement('span');
+    num.className = 'omr-num';
+    num.textContent = ox[1];
+    row.append(num);
+    for (const [mark, on] of [['○', isO(ox[2])], ['✕', !isO(ox[2])]]) {
+      const b = document.createElement('span');
+      b.className = 'omr-b ox' + (on ? ' on' : '');
+      b.textContent = mark;
+      row.append(b);
+    }
+    answerEl.replaceChildren(row);
+    answerEl.className = 'answer';
+    return;
+  }
   const m = lines.length === 1 && lines[0].match(/^(.+?)[ ]*:[ ]*([1-9])$/);
   if (!m) {
     answerEl.textContent = lines.join('\n');
@@ -696,7 +718,8 @@ function renderHist() {
   histEl.hidden = hist.length === 0;
   histList.replaceChildren(...hist.slice().reverse().map((t) => {
     const d = document.createElement('div');
-    d.textContent = t.replace(/^(.+?)[ ]*:[ ]*([1-9])$/, (all, n, a) => n + ' ' + '①②③④⑤⑥⑦⑧⑨'[a - 1]);
+    d.textContent = t.replace(/^(.+?)[ ]*:[ ]*([1-9])$/, (all, n, a) => n + ' ' + '①②③④⑤⑥⑦⑧⑨'[a - 1])
+      .replace(OX_RE, (all, n, a) => n + ' ' + (isO(a) ? '○' : '✕'));
     return d;
   }));
 }

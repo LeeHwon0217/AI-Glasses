@@ -224,6 +224,7 @@ html, body {
   font-size: 15px;
   font-weight: 700;
 }
+.omr-b.ox { width: 40px; height: 40px; margin: 0 4px; font-size: 22px; }
 .omr-b.on { background: #111; color: #f6f1e4; transform: scale(1.15); }
 
 /* 찍힌 사진: 답 옆에 작게. 누르면 크게 본다 */
